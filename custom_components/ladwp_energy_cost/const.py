@@ -119,27 +119,52 @@ STANDARD_RATES_2025 = {
     5: {"tier1": 0.22765, "tier2": 0.28624, "tier3": 0.28624},
     # June
     6: {"tier1": 0.22765, "tier2": 0.28624, "tier3": 0.37325},
-    # July - September (using June rates as placeholder until actual rates are available)
-    7: {"tier1": 0.22765, "tier2": 0.28624, "tier3": 0.37325},
-    8: {"tier1": 0.22765, "tier2": 0.28624, "tier3": 0.37325},
-    9: {"tier1": 0.22765, "tier2": 0.28624, "tier3": 0.37325},
-    # October - December (using previous year's rates as placeholder)
-    10: {"tier1": 0.21408, "tier2": 0.27267, "tier3": 0.27267},
-    11: {"tier1": 0.21408, "tier2": 0.27267, "tier3": 0.27267},
-    12: {"tier1": 0.21408, "tier2": 0.27267, "tier3": 0.27267},
+    # July - September (real published values)
+    7: {"tier1": 0.24306, "tier2": 0.30165, "tier3": 0.38866},
+    8: {"tier1": 0.24306, "tier2": 0.30165, "tier3": 0.38866},
+    9: {"tier1": 0.24306, "tier2": 0.30165, "tier3": 0.38866},
+    # October - December (real published values)
+    10: {"tier1": 0.24604, "tier2": 0.30463, "tier3": 0.30463},
+    11: {"tier1": 0.24604, "tier2": 0.30463, "tier3": 0.30463},
+    12: {"tier1": 0.24604, "tier2": 0.30463, "tier3": 0.30463},
+}
+
+# 2026 R-1A Total Consumption Charge (includes Adjustment Factors)
+# Source: ladwp.com residential rates, R-1A. Jul-Dec 2026 not yet published;
+# placeholders carry forward the latest known seasonal shape (June for summer,
+# Apr-May for winter) until LADWP posts the Jul/Oct adjustment factors.
+STANDARD_RATES_2026 = {
+    # January - March
+    1: {"tier1": 0.24771, "tier2": 0.30630, "tier3": 0.30630},
+    2: {"tier1": 0.24771, "tier2": 0.30630, "tier3": 0.30630},
+    3: {"tier1": 0.24771, "tier2": 0.30630, "tier3": 0.30630},
+    # April - May
+    4: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.30221},
+    5: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.30221},
+    # June
+    6: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.38922},
+    # July - September (placeholder: June 2026 summer rates until published)
+    7: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.38922},
+    8: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.38922},
+    9: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.38922},
+    # October - December (placeholder: Apr-May 2026 winter rates until published)
+    10: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.30221},
+    11: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.30221},
+    12: {"tier1": 0.24362, "tier2": 0.30221, "tier3": 0.30221},
 }
 
 # For backward compatibility, maintain the old format as well
+# (refreshed to latest published 2025 summer/winter shape)
 STANDARD_RATES = {
     "summer": {  # June-September
-        "tier1": 0.21169,  # Tier 1 (0-350 kWh)
-        "tier2": 0.27028,  # Tier 2 (351-1050 kWh)
-        "tier3": 0.35729,  # Tier 3 (>1050 kWh)
+        "tier1": 0.24306,  # Tier 1 (0-350 kWh)
+        "tier2": 0.30165,  # Tier 2 (351-1050 kWh)
+        "tier3": 0.38866,  # Tier 3 (>1050 kWh)
     },
     "winter": {  # October-May
-        "tier1": 0.20042,  # Tier 1 (0-350 kWh)
-        "tier2": 0.25901,  # Tier 2 (351-1050 kWh)
-        "tier3": 0.25901,  # Tier 3 (>1050 kWh)
+        "tier1": 0.24604,  # Tier 1 (0-350 kWh)
+        "tier2": 0.30463,  # Tier 2 (351-1050 kWh)
+        "tier3": 0.30463,  # Tier 3 (>1050 kWh)
     },
     "tier1_limit": TIER1_LIMIT,
     "tier2_limit": TIER2_LIMIT,
@@ -178,30 +203,55 @@ TOU_RATES_2025 = {
     5: {"high_peak": 0.25641, "low_peak": 0.25641, "base": 0.23287},
     # June
     6: {"high_peak": 0.31481, "low_peak": 0.25641, "base": 0.22897},
-    # July - September (using June rates as placeholder until actual rates are available)
-    7: {"high_peak": 0.31481, "low_peak": 0.25641, "base": 0.22897},
-    8: {"high_peak": 0.31481, "low_peak": 0.25641, "base": 0.22897},
-    9: {"high_peak": 0.31481, "low_peak": 0.25641, "base": 0.22897},
-    # October - December (using previous year's rates as placeholder)
-    10: {"high_peak": 0.24284, "low_peak": 0.24284, "base": 0.21930},
-    11: {"high_peak": 0.24284, "low_peak": 0.24284, "base": 0.21930},
-    12: {"high_peak": 0.24284, "low_peak": 0.24284, "base": 0.21930},
+    # July - September (real published values)
+    7: {"high_peak": 0.33022, "low_peak": 0.27182, "base": 0.24438},
+    8: {"high_peak": 0.33022, "low_peak": 0.27182, "base": 0.24438},
+    9: {"high_peak": 0.33022, "low_peak": 0.27182, "base": 0.24438},
+    # October - December (real published values)
+    10: {"high_peak": 0.27480, "low_peak": 0.27480, "base": 0.25126},
+    11: {"high_peak": 0.27480, "low_peak": 0.27480, "base": 0.25126},
+    12: {"high_peak": 0.27480, "low_peak": 0.27480, "base": 0.25126},
+}
+
+# 2026 R-1B (Time-of-Use) Total Consumption Charge (includes Adjustment Factors)
+# Source: ladwp.com residential rates, R-1B. Jul-Dec 2026 not yet published;
+# placeholders carry forward the latest known seasonal shape until LADWP posts
+# the Jul/Oct adjustment factors.
+TOU_RATES_2026 = {
+    # January - March
+    1: {"high_peak": 0.27647, "low_peak": 0.27647, "base": 0.25293},
+    2: {"high_peak": 0.27647, "low_peak": 0.27647, "base": 0.25293},
+    3: {"high_peak": 0.27647, "low_peak": 0.27647, "base": 0.25293},
+    # April - May
+    4: {"high_peak": 0.27238, "low_peak": 0.27238, "base": 0.24884},
+    5: {"high_peak": 0.27238, "low_peak": 0.27238, "base": 0.24884},
+    # June
+    6: {"high_peak": 0.33078, "low_peak": 0.27238, "base": 0.24494},
+    # July - September (placeholder: June 2026 summer rates until published)
+    7: {"high_peak": 0.33078, "low_peak": 0.27238, "base": 0.24494},
+    8: {"high_peak": 0.33078, "low_peak": 0.27238, "base": 0.24494},
+    9: {"high_peak": 0.33078, "low_peak": 0.27238, "base": 0.24494},
+    # October - December (placeholder: Apr-May 2026 winter rates until published)
+    10: {"high_peak": 0.27238, "low_peak": 0.27238, "base": 0.24884},
+    11: {"high_peak": 0.27238, "low_peak": 0.27238, "base": 0.24884},
+    12: {"high_peak": 0.27238, "low_peak": 0.27238, "base": 0.24884},
 }
 
 # For backward compatibility, maintain the old format as well
+# (refreshed to latest published 2025 summer/winter shape)
 TOU_RATES = {
     "winter": {  # January-May, October-December
-        "high_peak": 0.22918,
-        "low_peak": 0.22918,
-        "base": 0.20564,
+        "high_peak": 0.27480,
+        "low_peak": 0.27480,
+        "base": 0.25126,
     },
     "summer": {  # June-September
-        "high_peak": 0.29885,
-        "low_peak": 0.24045,
-        "base": 0.21301,
+        "high_peak": 0.33022,
+        "low_peak": 0.27182,
+        "base": 0.24438,
     },
 }
 
 # Net Metering Credit Rate (when sending power back to grid)
-# Using the base rate for simplicity
-NET_METERING_CREDIT_RATE = 0.1974
+# Using the latest R-1A Tier 1 base-period rate for simplicity
+NET_METERING_CREDIT_RATE = 0.24362

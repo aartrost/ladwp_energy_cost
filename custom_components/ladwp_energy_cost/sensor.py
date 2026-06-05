@@ -46,9 +46,11 @@ from .const import (
     TOU_RATES,
     TOU_RATES_2024,
     TOU_RATES_2025,
+    TOU_RATES_2026,
     NET_METERING_CREDIT_RATE,
     STANDARD_RATES_2024,
     STANDARD_RATES_2025,
+    STANDARD_RATES_2026,
     TIER1_LIMIT,
     TIER2_LIMIT,
     DEFAULT_ZONE,
@@ -786,17 +788,16 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         if self.rate_plan == RATE_PLAN_TIME_OF_USE:
             # Use year-specific rates when available
             if year == 2024:
-                # Use 2024 specific rates
                 return TOU_RATES_2024[month][period]
             elif year == 2025:
-                # Use 2025 specific rates
                 return TOU_RATES_2025[month][period]
+            elif year == 2026:
+                return TOU_RATES_2026[month][period]
             else:
-                # Fallback to seasonal rates for other years
-                # Use latest known rates (2025 for now)
-                # First try to get the month-specific rate from the latest year
-                if year > 2025:
-                    return TOU_RATES_2025[month][period]
+                # Fallback for other years
+                if year > 2026:
+                    # Future years: use the latest published table (2026)
+                    return TOU_RATES_2026[month][period]
                 else:
                     # For years before 2024, use the legacy seasonal rates
                     return TOU_RATES[season][period]
@@ -822,10 +823,13 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
                 return STANDARD_RATES_2024[month][tier]
             elif year == 2025:
                 return STANDARD_RATES_2025[month][tier]
+            elif year == 2026:
+                return STANDARD_RATES_2026[month][tier]
             else:
-                # Fallback to seasonal rates for other years
-                if year > 2025:
-                    return STANDARD_RATES_2025[month][tier]
+                # Fallback for other years
+                if year > 2026:
+                    # Future years: use the latest published table (2026)
+                    return STANDARD_RATES_2026[month][tier]
                 else:
                     # For years before 2024, use the legacy seasonal rates
                     return STANDARD_RATES[season][tier]
@@ -833,72 +837,72 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> Dict[str, Any]:
         """Update the energy data."""
         try:
-        now = dt_util.now()
-        
-        # Check if we need to reset counters
-        if now >= self._get_next_reset_time():
+            now = dt_util.now()
+
+            # Check if we need to reset counters
+            if now >= self._get_next_reset_time():
                 _LOGGER.info("Resetting energy data for new billing cycle")
-            self.data = self._init_energy_data()
-            self.last_reset = self._get_billing_cycle_start()
-            
-        # Get current state of entities
-        grid_power = self._get_entity_state(self.grid_entity_id)
-        solar_power = self._get_entity_state(self.solar_entity_id) if self.solar_entity_id else None
-        load_power = self._get_entity_state(self.load_entity_id) if self.load_entity_id else None
-        
-        if grid_power is None:
+                self.data = self._init_energy_data()
+                self.last_reset = self._get_billing_cycle_start()
+
+            # Get current state of entities
+            grid_power = self._get_entity_state(self.grid_entity_id)
+            solar_power = self._get_entity_state(self.solar_entity_id) if self.solar_entity_id else None
+            load_power = self._get_entity_state(self.load_entity_id) if self.load_entity_id else None
+
+            if grid_power is None:
                 _LOGGER.error("Cannot get grid power state for entity: %s", self.grid_entity_id)
-            return self.data
-            
+                return self.data
+
             _LOGGER.debug(
-                "Entity states - grid: %s, solar: %s, load: %s", 
+                "Entity states - grid: %s, solar: %s, load: %s",
                 grid_power, solar_power, load_power
             )
-            
-        # Determine current time period
-        current_period = self._get_time_period(now)
-        current_rate = self._get_rate(now, current_period)
-            
+
+            # Determine current time period
+            current_period = self._get_time_period(now)
+            current_rate = self._get_rate(now, current_period)
+
             _LOGGER.debug("Current period: %s, rate: %s", current_period, current_rate)
-        
-        # Calculate energy for this update interval (kWh)
-        grid_energy = grid_power * WATTS_TO_KWH_PER_MINUTE
-        
-        # Distribute grid energy to appropriate period
-        if grid_energy > 0:  # Delivered from grid (consumption)
-            self.data[f"{current_period}_kwh_delivered"] += grid_energy
-            self.data[ATTR_TOTAL_KWH_DELIVERED] += grid_energy
-        else:  # Received by grid (excess solar)
-            received_energy = abs(grid_energy)
-            self.data[f"{current_period}_kwh_received"] += received_energy
-            self.data[ATTR_TOTAL_KWH_RECEIVED] += received_energy
-        
-        # Process solar data if available
-        if solar_power is not None:
-            solar_energy = solar_power * WATTS_TO_KWH_PER_MINUTE
-            
-            # Add to period solar generation
-            self.data[f"{current_period}_kwh_generated"] += solar_energy
-            self.data[ATTR_TOTAL_KWH_GENERATED] += solar_energy
-            
-            # Calculate savings from solar (at current period rate)
-            self.data[ATTR_SOLAR_COST_SAVINGS] += solar_energy * current_rate
-            
-        # Process load data if available
-        if load_power is not None:
-            load_energy = load_power * WATTS_TO_KWH_PER_MINUTE
-            
-            # Add to period consumption
-            self.data[f"{current_period}_kwh_consumed"] += load_energy
-            self.data[ATTR_TOTAL_KWH_CONSUMED] += load_energy
-            
-            # Calculate load cost (at current period rate)
-            self.data[ATTR_LOAD_COST] += load_energy * current_rate
-            
-            # Update net values and costs
+
+            # Calculate energy for this update interval (kWh)
+            grid_energy = grid_power * WATTS_TO_KWH_PER_MINUTE
+
+            # Distribute grid energy to appropriate period
+            if grid_energy > 0:  # Delivered from grid (consumption)
+                self.data[f"{current_period}_kwh_delivered"] += grid_energy
+                self.data[ATTR_TOTAL_KWH_DELIVERED] += grid_energy
+            else:  # Received by grid (excess solar)
+                received_energy = abs(grid_energy)
+                self.data[f"{current_period}_kwh_received"] += received_energy
+                self.data[ATTR_TOTAL_KWH_RECEIVED] += received_energy
+
+            # Process solar data if available
+            if solar_power is not None:
+                solar_energy = solar_power * WATTS_TO_KWH_PER_MINUTE
+
+                # Add to period solar generation
+                self.data[f"{current_period}_kwh_generated"] += solar_energy
+                self.data[ATTR_TOTAL_KWH_GENERATED] += solar_energy
+
+                # Calculate savings from solar (at current period rate)
+                self.data[ATTR_SOLAR_COST_SAVINGS] += solar_energy * current_rate
+
+            # Process load data if available
+            if load_power is not None:
+                load_energy = load_power * WATTS_TO_KWH_PER_MINUTE
+
+                # Add to period consumption
+                self.data[f"{current_period}_kwh_consumed"] += load_energy
+                self.data[ATTR_TOTAL_KWH_CONSUMED] += load_energy
+
+                # Calculate load cost (at current period rate)
+                self.data[ATTR_LOAD_COST] += load_energy * current_rate
+
+            # Update net values and costs (every cycle, regardless of load)
             self._update_net_values_and_costs(now)
-            
-        return self.data
+
+            return self.data
         except Exception as e:
             _LOGGER.exception("Error updating LADWP energy data: %s", str(e))
             # Return existing data on error to avoid breaking the sensor
