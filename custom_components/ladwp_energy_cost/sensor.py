@@ -299,6 +299,10 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         self._max_change_ratio = 5  # Maximum allowed change ratio (5x increase/decrease)
         self._min_valid_power = 0.1  # Minimum valid power value (100W)
 
+        # Entity type detection and energy delta tracking
+        self._entity_units: Dict[str, str] = {}  # Cache unit_of_measurement per entity
+        self._last_energy_values: Dict[str, float] = {}  # Last kWh value for delta calc
+
     async def async_setup(self) -> None:
         """Set up the coordinator and load historical data."""
         # Initialize with past data from the current billing cycle
@@ -390,6 +394,59 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Found %d historical states for %s", len(history[entity_id]), entity_id)
         return history[entity_id]
         
+    def _history_to_kwh_deltas(self, history: List[dict], entity_id: str, allow_negative: bool = False) -> Dict[Any, float]:
+        """Convert cumulative energy history to a {timestamp: kwh_delta} dict.
+
+        Works for both statistics data (uses 'sum') and raw state history (uses state values).
+        Negative deltas (sensor resets) are treated as zero.
+        """
+        deltas: Dict[Any, float] = {}
+
+        # Statistics data
+        if history and isinstance(history[0], dict) and "start" in history[0]:
+            sorted_entries = sorted(
+                [e for e in history if isinstance(e, dict) and "start" in e],
+                key=lambda e: e["start"]
+            )
+            prev_sum: Optional[float] = None
+            for entry in sorted_entries:
+                ts = entry.get("start")
+                if not isinstance(ts, datetime):
+                    try:
+                        ts = dt_util.parse_datetime(ts) if isinstance(ts, str) else None
+                    except (ValueError, TypeError):
+                        ts = None
+                if ts is None:
+                    continue
+                raw_sum = entry.get("sum")
+                if raw_sum is None:
+                    continue
+                current_sum = self._to_kwh(float(raw_sum), entity_id)
+                if prev_sum is not None:
+                    delta = current_sum - prev_sum
+                    deltas[ts] = delta if (delta >= 0 or allow_negative) else 0.0
+                prev_sum = current_sum
+            return deltas
+
+        # Raw state history
+        sorted_states = sorted(
+            [s for s in history if hasattr(s, "last_updated")],
+            key=lambda s: s.last_updated
+        )
+        prev_val: Optional[float] = None
+        prev_ts = None
+        for state in sorted_states:
+            try:
+                val = self._to_kwh(float(state.state), entity_id)
+            except (ValueError, TypeError):
+                continue
+            if prev_val is not None and prev_ts is not None:
+                delta = val - prev_val
+                deltas[prev_ts] = delta if (delta >= 0 or allow_negative) else 0.0
+            prev_val = val
+            prev_ts = state.last_updated
+        return deltas
+
     async def _process_historical_data(
         self, 
         grid_history: List[dict], 
@@ -398,47 +455,53 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
     ) -> None:
         """Process historical data and update energy calculations."""
         _LOGGER.debug("Processing %d historical entries for grid power", len(grid_history))
-        
+
+        # Pre-compute kWh delta dicts for any energy entities so they are not
+        # multiplied by a time factor (they already represent kWh, not watts).
+        grid_is_energy = self._is_energy_entity(self.grid_entity_id)
+        solar_is_energy = bool(solar_history and self.solar_entity_id and self._is_energy_entity(self.solar_entity_id))
+        load_is_energy = bool(load_history and self.load_entity_id and self._is_energy_entity(self.load_entity_id))
+
+        grid_deltas = self._history_to_kwh_deltas(grid_history, self.grid_entity_id, allow_negative=True) if grid_is_energy else {}
+        solar_deltas = self._history_to_kwh_deltas(solar_history, self.solar_entity_id) if solar_is_energy else {}
+        load_deltas = self._history_to_kwh_deltas(load_history, self.load_entity_id) if load_is_energy else {}
+
         # Process each time slice in sequence to properly track tier changes
         # Need to sort by timestamp to ensure correct order
         timestamps = self._get_sorted_timestamps(grid_history, solar_history, load_history)
-        
+
         if not timestamps:
             _LOGGER.warning("No valid timestamps found in historical data")
             return
-            
+
         # Convert raw states to energy values
         for i, timestamp in enumerate(timestamps):
-            # Get power values at this timestamp
-            grid_power = self._get_power_at_timestamp(grid_history, timestamp)
-            solar_power = self._get_power_at_timestamp(solar_history, timestamp) if solar_history else None
-            load_power = self._get_power_at_timestamp(load_history, timestamp) if load_history else None
-            
-            if grid_power is None:
-                continue
-                
-            # Calculate energy based on distance to next timestamp
+            # Calculate energy based on distance to next timestamp (used for power entities)
             if i + 1 < len(timestamps):
                 next_timestamp = timestamps[i + 1]
-                # Ensure both are datetime objects
                 if isinstance(timestamp, datetime) and isinstance(next_timestamp, datetime):
                     duration_minutes = (next_timestamp - timestamp).total_seconds() / 60
-                    watts_to_kwh = 1 / 60 / 1000  # Convert W to kWh for 1 minute
-                    energy_factor = duration_minutes * watts_to_kwh
+                    energy_factor = duration_minutes * WATTS_TO_KWH_PER_MINUTE
                 else:
-                    # Default to 5 minutes for statistics data intervals
                     energy_factor = 5 * WATTS_TO_KWH_PER_MINUTE
             else:
-                # Last entry - use default 5 minute interval for statistics data
                 energy_factor = 5 * WATTS_TO_KWH_PER_MINUTE
-                
+
             # Determine time period for this timestamp
             period = self._get_time_period(timestamp)
             rate = self._get_rate(timestamp, period)
-            
-            # Update energy data
-            # Grid energy
-            grid_energy = grid_power * energy_factor
+
+            # --- Grid energy ---
+            if grid_is_energy:
+                grid_energy = grid_deltas.get(timestamp)
+                if grid_energy is None:
+                    continue
+            else:
+                grid_power = self._get_power_at_timestamp(grid_history, timestamp)
+                if grid_power is None:
+                    continue
+                grid_energy = grid_power * energy_factor
+
             if grid_energy > 0:  # Delivered from grid (consumption)
                 self.data[f"{period}_kwh_delivered"] += grid_energy
                 self.data[ATTR_TOTAL_KWH_DELIVERED] += grid_energy
@@ -446,21 +509,31 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
                 received_energy = abs(grid_energy)
                 self.data[f"{period}_kwh_received"] += received_energy
                 self.data[ATTR_TOTAL_KWH_RECEIVED] += received_energy
-                
-            # Solar energy
-            if solar_power is not None:
-                solar_energy = solar_power * energy_factor
-                self.data[f"{period}_kwh_generated"] += solar_energy
-                self.data[ATTR_TOTAL_KWH_GENERATED] += solar_energy
-                self.data[ATTR_SOLAR_COST_SAVINGS] += solar_energy * rate
-                
-            # Load energy
-            if load_power is not None:
-                load_energy = load_power * energy_factor
-                self.data[f"{period}_kwh_consumed"] += load_energy
-                self.data[ATTR_TOTAL_KWH_CONSUMED] += load_energy
-                self.data[ATTR_LOAD_COST] += load_energy * rate
-                
+
+            # --- Solar energy ---
+            if solar_history:
+                if solar_is_energy:
+                    solar_energy = solar_deltas.get(timestamp)
+                else:
+                    solar_power = self._get_power_at_timestamp(solar_history, timestamp)
+                    solar_energy = solar_power * energy_factor if solar_power is not None else None
+                if solar_energy is not None:
+                    self.data[f"{period}_kwh_generated"] += solar_energy
+                    self.data[ATTR_TOTAL_KWH_GENERATED] += solar_energy
+                    self.data[ATTR_SOLAR_COST_SAVINGS] += solar_energy * rate
+
+            # --- Load energy ---
+            if load_history:
+                if load_is_energy:
+                    load_energy = load_deltas.get(timestamp)
+                else:
+                    load_power = self._get_power_at_timestamp(load_history, timestamp)
+                    load_energy = load_power * energy_factor if load_power is not None else None
+                if load_energy is not None:
+                    self.data[f"{period}_kwh_consumed"] += load_energy
+                    self.data[ATTR_TOTAL_KWH_CONSUMED] += load_energy
+                    self.data[ATTR_LOAD_COST] += load_energy * rate
+
         # Calculate net values and costs
         self._update_net_values_and_costs(dt_util.now())
         
@@ -866,7 +939,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Current period: %s, rate: %s", current_period, current_rate)
 
             # Calculate energy for this update interval (kWh)
-            grid_energy = grid_power * WATTS_TO_KWH_PER_MINUTE
+            grid_energy = self._calc_live_energy(self.grid_entity_id, grid_power, allow_negative=True)
 
             # Distribute grid energy to appropriate period
             if grid_energy > 0:  # Delivered from grid (consumption)
@@ -879,7 +952,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
             # Process solar data if available
             if solar_power is not None:
-                solar_energy = solar_power * WATTS_TO_KWH_PER_MINUTE
+                solar_energy = self._calc_live_energy(self.solar_entity_id, solar_power)
 
                 # Add to period solar generation
                 self.data[f"{current_period}_kwh_generated"] += solar_energy
@@ -890,7 +963,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
             # Process load data if available
             if load_power is not None:
-                load_energy = load_power * WATTS_TO_KWH_PER_MINUTE
+                load_energy = self._calc_live_energy(self.load_entity_id, load_power)
 
                 # Add to period consumption
                 self.data[f"{current_period}_kwh_consumed"] += load_energy
@@ -907,6 +980,45 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Error updating LADWP energy data: %s", str(e))
             # Return existing data on error to avoid breaking the sensor
             return self.data
+
+    def _calc_live_energy(self, entity_id: str, raw_value: float, allow_negative: bool = False) -> float:
+        """Return the kWh increment for one update tick.
+
+        Power entities: multiply watts by 1-minute interval.
+        Energy entities: return the delta since the last reading (no time multiplication).
+        allow_negative: when True, a negative delta is returned as-is (grid export);
+                        when False, a negative delta is treated as a sensor reset and returns 0.
+        """
+        if self._is_energy_entity(entity_id):
+            current_kwh = self._to_kwh(raw_value, entity_id)
+            last_kwh = self._last_energy_values.get(entity_id)
+            self._last_energy_values[entity_id] = current_kwh
+            if last_kwh is None:
+                return 0.0
+            delta = current_kwh - last_kwh
+            return delta if (delta >= 0 or allow_negative) else 0.0
+        return raw_value * WATTS_TO_KWH_PER_MINUTE
+
+    def _is_energy_entity(self, entity_id: str) -> bool:
+        """Return True if the entity reports cumulative energy (kWh/Wh/MWh) rather than power (W/kW)."""
+        unit = self._entity_units.get(entity_id)
+        if unit is None:
+            state = self.hass.states.get(entity_id)
+            if state:
+                unit = state.attributes.get("unit_of_measurement", "")
+                self._entity_units[entity_id] = unit
+            else:
+                return False
+        return unit.lower() in ("kwh", "wh", "mwh")
+
+    def _to_kwh(self, value: float, entity_id: str) -> float:
+        """Normalize an energy entity value to kWh."""
+        unit = self._entity_units.get(entity_id, "").lower()
+        if unit == "wh":
+            return value / 1000
+        if unit == "mwh":
+            return value * 1000
+        return value
 
     def _get_entity_state(self, entity_id: Optional[str]) -> Optional[float]:
         """Get the current state of an entity as a float."""
