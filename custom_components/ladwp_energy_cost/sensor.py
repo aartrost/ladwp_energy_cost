@@ -332,13 +332,10 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         await self._load_historical_data()
 
     async def _restore_from_sensor_states(self) -> bool:
-        """Seed self.data from each output sensor's state ~30 minutes ago.
+        """Seed self.data from the last known states of our output sensors.
 
-        Uses the recorder so we get the pre-restart value rather than the
-        post-restart zero. Returns True if at least one non-zero value was recovered.
+        Returns True if at least one non-zero value was recovered.
         """
-        from homeassistant.components.recorder import get_instance
-        from homeassistant.components.recorder.history import get_significant_states
         from homeassistant.helpers import entity_registry as er
 
         registry = er.async_get(self.hass)
@@ -369,50 +366,21 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             uid_map[f"ladwp_total_load_{load_sfx}"] = ATTR_TOTAL_KWH_CONSUMED
             uid_map[f"ladwp_load_cost_{load_sfx}"] = ATTR_LOAD_COST
 
-        # Resolve unique IDs → entity IDs; skip any that aren't registered yet
-        entity_ids = {}
-        for unique_id, data_key in uid_map.items():
-            eid = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
-            if eid is not None:
-                entity_ids[eid] = data_key
-
-        if not entity_ids:
-            return False
-
-        # Query a 10-minute window centred on 30 minutes ago so we catch the
-        # last recorded value before the restart regardless of update jitter
-        target = dt_util.now() - timedelta(minutes=30)
-        window_start = target - timedelta(minutes=5)
-        window_end = target + timedelta(minutes=5)
-
-        try:
-            history = await get_instance(self.hass).async_add_executor_job(
-                get_significant_states,
-                self.hass,
-                window_start,
-                window_end,
-                list(entity_ids.keys()),
-                None,
-                True,
-            )
-        except Exception as e:
-            _LOGGER.debug("Could not fetch sensor history for migration: %s", e)
-            return False
-
         restored_any = False
-        for eid, data_key in entity_ids.items():
-            states = history.get(eid, [])
-            if not states:
+        for unique_id, data_key in uid_map.items():
+            entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+            if entity_id is None:
                 continue
-            # Take the last state in the window (closest to the target time)
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
             try:
-                val = float(states[-1].state)
+                val = float(state.state)
             except (ValueError, TypeError):
                 continue
             if val != 0:
                 self.data[data_key] = val
                 restored_any = True
-                _LOGGER.debug("Migrated %s → %s = %s", eid, data_key, val)
 
         return restored_any
 
