@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.device_registry import DeviceEntryType
@@ -303,9 +304,24 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         self._entity_units: Dict[str, str] = {}  # Cache unit_of_measurement per entity
         self._last_energy_values: Dict[str, float] = {}  # Last kWh value for delta calc
 
+        # Persistent storage so accumulated data survives HA restarts
+        storage_key = f"ladwp_energy_cost_{grid_entity_id.replace('.', '_')}"
+        self._store = Store(hass, 1, storage_key)
+
     async def async_setup(self) -> None:
-        """Set up the coordinator and load historical data."""
-        # Initialize with past data from the current billing cycle
+        """Set up the coordinator, restoring persisted data or backfilling from history."""
+        stored = await self._store.async_load()
+        if stored:
+            stored_last_reset = dt_util.parse_datetime(stored.get("last_reset", ""))
+            current_billing_start = self._get_billing_cycle_start()
+            if stored_last_reset and stored_last_reset >= current_billing_start:
+                # Stored data belongs to the current billing cycle — restore it directly.
+                self.last_reset = stored_last_reset
+                self.data = stored.get("data", self._init_energy_data())
+                _LOGGER.info("Restored energy data from storage (last_reset=%s)", self.last_reset)
+                return
+
+        # No usable stored data (first run, or billing cycle rolled over) — backfill from recorder.
         await self._load_historical_data()
 
     async def _load_historical_data(self) -> None:
@@ -954,6 +970,12 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
             # Update net values and costs (every cycle, regardless of load)
             self._update_net_values_and_costs(now)
+
+            # Persist so a restart can restore this billing cycle's data
+            await self._store.async_save({
+                "last_reset": self.last_reset.isoformat(),
+                "data": self.data,
+            })
 
             return self.data
         except Exception as e:
