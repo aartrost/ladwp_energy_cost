@@ -321,68 +321,8 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Restored energy data from storage (last_reset=%s)", self.last_reset)
                 return
 
-        # No usable stored data yet. Try a one-time migration: read the last known
-        # states of our own output sensors (HA keeps these in its state machine across
-        # restarts) so values don't drop to zero while the store is being established.
-        if await self._restore_from_sensor_states():
-            _LOGGER.info("Restored energy data from previous sensor states (one-time migration)")
-            return
-
-        # Nothing to restore — backfill from recorder history.
+        # No usable stored data (first run, or billing cycle rolled over) — backfill from recorder.
         await self._load_historical_data()
-
-    async def _restore_from_sensor_states(self) -> bool:
-        """Seed self.data from the last known states of our output sensors.
-
-        Returns True if at least one non-zero value was recovered.
-        """
-        from homeassistant.helpers import entity_registry as er
-
-        registry = er.async_get(self.hass)
-        grid_sfx = self.grid_entity_id.replace(".", "_")
-
-        # unique_id → self.data key
-        uid_map: Dict[str, str] = {}
-        for period in ["high_peak", "low_peak", "base"]:
-            uid_map[f"ladwp_{period}_delivered_{grid_sfx}"] = f"{period}_kwh_delivered"
-            uid_map[f"ladwp_{period}_received_{grid_sfx}"] = f"{period}_kwh_received"
-            uid_map[f"ladwp_{period}_net_{grid_sfx}"] = f"net_{period}_kwh"
-            uid_map[f"ladwp_{period}_cost_{grid_sfx}"] = f"{period}_cost"
-        uid_map[f"ladwp_total_delivered_{grid_sfx}"] = ATTR_TOTAL_KWH_DELIVERED
-        uid_map[f"ladwp_total_received_{grid_sfx}"] = ATTR_TOTAL_KWH_RECEIVED
-        uid_map[f"ladwp_total_net_{grid_sfx}"] = ATTR_TOTAL_KWH_NET
-
-        if self.solar_entity_id:
-            solar_sfx = self.solar_entity_id.replace(".", "_")
-            for period in ["high_peak", "low_peak", "base"]:
-                uid_map[f"ladwp_{period}_solar_{solar_sfx}"] = f"{period}_kwh_generated"
-            uid_map[f"ladwp_total_solar_{solar_sfx}"] = ATTR_TOTAL_KWH_GENERATED
-            uid_map[f"ladwp_solar_savings_{solar_sfx}"] = ATTR_SOLAR_COST_SAVINGS
-
-        if self.load_entity_id:
-            load_sfx = self.load_entity_id.replace(".", "_")
-            for period in ["high_peak", "low_peak", "base"]:
-                uid_map[f"ladwp_{period}_load_{load_sfx}"] = f"{period}_kwh_consumed"
-            uid_map[f"ladwp_total_load_{load_sfx}"] = ATTR_TOTAL_KWH_CONSUMED
-            uid_map[f"ladwp_load_cost_{load_sfx}"] = ATTR_LOAD_COST
-
-        restored_any = False
-        for unique_id, data_key in uid_map.items():
-            entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
-            if entity_id is None:
-                continue
-            state = self.hass.states.get(entity_id)
-            if state is None or state.state in ("unknown", "unavailable"):
-                continue
-            try:
-                val = float(state.state)
-            except (ValueError, TypeError):
-                continue
-            if val != 0:
-                self.data[data_key] = val
-                restored_any = True
-
-        return restored_any
 
     async def _load_historical_data(self) -> None:
         """Load historical data from entities since the beginning of the billing cycle."""
