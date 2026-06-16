@@ -410,12 +410,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             )
             prev_sum: Optional[float] = None
             for entry in sorted_entries:
-                ts = entry.get("start")
-                if not isinstance(ts, datetime):
-                    try:
-                        ts = dt_util.parse_datetime(ts) if isinstance(ts, str) else None
-                    except (ValueError, TypeError):
-                        ts = None
+                ts = self._parse_timestamp(entry.get("start"))
                 if ts is None:
                     continue
                 raw_sum = entry.get("sum")
@@ -562,67 +557,56 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         # Update total net
         self.data[ATTR_TOTAL_KWH_NET] = self.data[ATTR_TOTAL_KWH_DELIVERED] - self.data[ATTR_TOTAL_KWH_RECEIVED]
     
+    @staticmethod
+    def _parse_timestamp(raw) -> Optional[datetime]:
+        """Coerce a statistics or state timestamp to a datetime, handling all HA formats."""
+        if isinstance(raw, datetime):
+            return raw
+        if isinstance(raw, (int, float)):
+            # Unix epoch seconds — used by some HA recorder versions
+            try:
+                return dt_util.utc_from_timestamp(raw)
+            except (ValueError, OSError):
+                return None
+        if isinstance(raw, str):
+            try:
+                return dt_util.parse_datetime(raw)
+            except (ValueError, TypeError):
+                return None
+        return None
+
     def _get_sorted_timestamps(
-        self, 
-        grid_history: List[dict], 
-        solar_history: Optional[List[dict]], 
-        load_history: Optional[List[dict]]
+        self,
+        grid_history: List[dict],
+        solar_history: Optional[List[dict]],
+        load_history: Optional[List[dict]],
     ) -> List[datetime]:
         """Get a sorted list of all timestamps from the historical data."""
-        timestamps = set()
-        
-        # Add grid timestamps
-        for state in grid_history:
-            if isinstance(state, dict) and "start" in state:
-                # Statistics data - ensure it's a datetime
-                if isinstance(state["start"], datetime):
-                    timestamps.add(state["start"])
-                else:
-                    # Try to convert if it's a string
-                    try:
-                        if isinstance(state["start"], str):
-                            timestamps.add(dt_util.parse_datetime(state["start"]))
-                    except (ValueError, TypeError):
-                        _LOGGER.debug("Couldn't convert timestamp: %s", state["start"])
-            elif hasattr(state, "last_updated"):
-                # State data
-                timestamps.add(state.last_updated)
-                
-        # Add solar timestamps
-        if solar_history:
-            for state in solar_history:
-                if isinstance(state, dict) and "start" in state:
-                    if isinstance(state["start"], datetime):
-                        timestamps.add(state["start"])
-                    else:
-                        try:
-                            if isinstance(state["start"], str):
-                                timestamps.add(dt_util.parse_datetime(state["start"]))
-                        except (ValueError, TypeError):
-                            _LOGGER.debug("Couldn't convert timestamp: %s", state["start"])
-                elif hasattr(state, "last_updated"):
-                    timestamps.add(state.last_updated)
-                    
-        # Add load timestamps
-        if load_history:
-            for state in load_history:
-                if isinstance(state, dict) and "start" in state:
-                    if isinstance(state["start"], datetime):
-                        timestamps.add(state["start"])
-                    else:
-                        try:
-                            if isinstance(state["start"], str):
-                                timestamps.add(dt_util.parse_datetime(state["start"]))
-                        except (ValueError, TypeError):
-                            _LOGGER.debug("Couldn't convert timestamp: %s", state["start"])
-                elif hasattr(state, "last_updated"):
-                    timestamps.add(state.last_updated)
-                    
-        # Filter out any non-datetime values
-        timestamps = {ts for ts in timestamps if isinstance(ts, datetime)}
-        
-        # Sort timestamps
-        return sorted(list(timestamps))
+        timestamps: set = set()
+
+        for history in filter(None, [grid_history, solar_history, load_history]):
+            for entry in history:
+                if isinstance(entry, dict) and "start" in entry:
+                    ts = self._parse_timestamp(entry["start"])
+                    if ts is not None:
+                        timestamps.add(ts)
+                elif hasattr(entry, "last_updated"):
+                    ts = self._parse_timestamp(entry.last_updated)
+                    if ts is not None:
+                        timestamps.add(ts)
+
+        if not timestamps:
+            # Log a sample entry so we can diagnose unexpected formats
+            sample = next(
+                (e for h in filter(None, [grid_history, solar_history, load_history]) for e in h),
+                None,
+            )
+            _LOGGER.debug(
+                "Could not extract any timestamps. Sample entry type=%s value=%s",
+                type(sample).__name__, repr(sample)
+            )
+
+        return sorted(timestamps)
         
     def _is_spike(self, power_value: float, entity_id: str) -> bool:
         """Detect if a power value is a spike using multiple methods.
@@ -696,13 +680,9 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
                 if not isinstance(entry, dict) or "start" not in entry:
                     continue
                     
-                entry_timestamp = entry.get("start")
-                # Handle different timestamp formats
-                if not isinstance(entry_timestamp, datetime) and isinstance(entry_timestamp, str):
-                    try:
-                        entry_timestamp = dt_util.parse_datetime(entry_timestamp)
-                    except (ValueError, TypeError):
-                        continue
+                entry_timestamp = self._parse_timestamp(entry.get("start"))
+                if entry_timestamp is None:
+                    continue
                         
                 if entry_timestamp == timestamp:
                     power_value = None
