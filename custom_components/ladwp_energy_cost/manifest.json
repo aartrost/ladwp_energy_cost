@@ -4,10 +4,11 @@
   "documentation": "https://github.com/zphoenixrises/ladwp_energy_cost",
   "issue_tracker": "https://github.com/zphoenixrises/ladwp_energy_cost/issues",
   "dependencies": [],
+  "after_dependencies": ["recorder"],
   "codeowners": ["@zphoenixrises"],
   "requirements": [],
   "iot_class": "calculated",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "config_flow": true,
   "diagnostics": true
 }

@@ -5,46 +5,64 @@ from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, CONF_GRID_POWER_ENTITY, CONF_SOLAR_POWER_ENTITY, CONF_LOAD_POWER_ENTITY
+from .const import (
+    CONF_GRID_POWER_ENTITY,
+    CONF_LOAD_POWER_ENTITY,
+    CONF_SOLAR_POWER_ENTITY,
+    DOMAIN,
+)
+from .coordinator import LADWPEnergyDataCoordinator
 
 TO_REDACT = {CONF_GRID_POWER_ENTITY, CONF_SOLAR_POWER_ENTITY, CONF_LOAD_POWER_ENTITY}
+
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    data = {}
-    
-    # Get integration data
-    if entry.entry_id in hass.data.get(DOMAIN, {}):
-        data["config"] = async_redact_data(dict(entry.data), TO_REDACT)
-        
-        # Add entity availability info
-        data["entities"] = {}
-        for entity_id in [
-            entry.data.get(CONF_GRID_POWER_ENTITY),
-            entry.data.get(CONF_SOLAR_POWER_ENTITY),
-            entry.data.get(CONF_LOAD_POWER_ENTITY),
-        ]:
-            if entity_id:
-                state = hass.states.get(entity_id)
-                data["entities"][entity_id] = {
-                    "available": state is not None and state.state not in ("unknown", "unavailable"),
-                    "state": state.state if state else "not_found",
-                }
-    
-    # Add registered entities from the integration
-    data["registered_entities"] = []
-    entity_reg = hass.helpers.entity_registry.async_get(hass)
-    for entity in entity_reg.entities.values():
-        if entity.config_entry_id == entry.entry_id:
-            data["registered_entities"].append({
-                "entity_id": entity.entity_id,
-                "unique_id": entity.unique_id,
-                "device_id": entity.device_id,
-            })
-    
-    return data 
+    data: dict[str, Any] = {
+        "config": async_redact_data(dict(entry.data), TO_REDACT),
+        "options": async_redact_data(dict(entry.options), TO_REDACT),
+    }
+
+    coordinator: LADWPEnergyDataCoordinator | None = hass.data.get(DOMAIN, {}).get(
+        entry.entry_id
+    )
+    if coordinator is not None:
+        data["accumulators"] = dict(coordinator.data or {})
+        data["last_reset"] = (
+            coordinator.last_reset.isoformat() if coordinator.last_reset else None
+        )
+        data["last_update_success"] = coordinator.last_update_success
+
+    # Source entity availability.
+    data["source_entities"] = {}
+    for entity_id in (
+        entry.data.get(CONF_GRID_POWER_ENTITY),
+        entry.data.get(CONF_SOLAR_POWER_ENTITY),
+        entry.data.get(CONF_LOAD_POWER_ENTITY),
+    ):
+        if entity_id:
+            state = hass.states.get(entity_id)
+            data["source_entities"][entity_id] = {
+                "available": state is not None
+                and state.state not in ("unknown", "unavailable"),
+                "state": state.state if state else "not_found",
+                "unit": state.attributes.get("unit_of_measurement") if state else None,
+            }
+
+    # Entities this entry created.
+    registry = er.async_get(hass)
+    data["registered_entities"] = [
+        {
+            "entity_id": ent.entity_id,
+            "unique_id": ent.unique_id,
+        }
+        for ent in registry.entities.values()
+        if ent.config_entry_id == entry.entry_id
+    ]
+
+    return data

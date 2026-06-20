@@ -4,6 +4,7 @@ import voluptuous as vol
 from homeassistant.const import CONF_NAME, CONF_ENTITY_ID
 
 DOMAIN = "ladwp_energy_cost"
+VERSION = "0.8.0"
 
 # Configuration constants
 CONF_GRID_POWER_ENTITY = "grid_power_entity"
@@ -13,6 +14,41 @@ CONF_RATE_PLAN = "rate_plan"
 CONF_BILLING_DAY = "billing_day"
 CONF_ZONE = "zone"
 CONF_BILLING_PERIOD = "billing_period"
+CONF_GRID_INVERT_SIGN = "grid_invert_sign"
+
+# Engine / storage tuning
+STORAGE_VERSION = 1
+UPDATE_INTERVAL_SECONDS = 60       # periodic tick: flush integration, persist, reset check
+MAX_INTEGRATION_GAP_HOURS = 6      # don't integrate power across gaps longer than this
+DEFAULT_GRID_INVERT_SIGN = False
+
+# One-time recorder seed.
+# On the first start after upgrading from the in-memory architecture there is no
+# persisted storage yet, so the current billing cycle would otherwise reset to
+# zero. When ONE_TIME_SEED_DATE is set, the coordinator instead restores each
+# accumulator from its sensor's recorded value at the (date, time) below. It runs
+# at most once (storage then becomes the source of truth) and is ignored entirely
+# once now is past the seed point by more than ONE_TIME_SEED_MAX_AGE_DAYS, so a
+# future fresh install never seeds to a stale date. Set the date to None to disable.
+ONE_TIME_SEED_DATE = (2026, 6, 19)   # restore point: 2026-06-19
+ONE_TIME_SEED_TIME = (14, 30)        # 2:30 PM local
+ONE_TIME_SEED_MAX_AGE_DAYS = 14
+
+# Time-of-use periods
+PERIODS = ["high_peak", "low_peak", "base"]
+
+# Accumulator data keys (also surfaced as attributes / sensor states)
+ATTR_TOTAL_KWH_DELIVERED = "total_kwh_delivered"
+ATTR_TOTAL_KWH_RECEIVED = "total_kwh_received"
+ATTR_TOTAL_KWH_NET = "total_kwh_net"
+ATTR_TOTAL_KWH_GENERATED = "total_kwh_generated"
+ATTR_SOLAR_COST_SAVINGS = "solar_cost_savings"
+ATTR_TOTAL_KWH_CONSUMED = "total_kwh_consumed"
+ATTR_LOAD_COST = "load_cost"
+
+# Unit classification (case-insensitive). Power normalizes to W, energy to kWh.
+POWER_UNITS = {"w": 1.0, "kw": 1000.0, "mw": 1_000_000.0}
+ENERGY_UNITS = {"wh": 0.001, "kwh": 1.0, "mwh": 1000.0}
 
 # Rate plan options
 RATE_PLAN_STANDARD = "standard"

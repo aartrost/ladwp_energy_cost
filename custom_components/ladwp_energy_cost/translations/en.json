@@ -3,21 +3,28 @@
     "step": {
       "user": {
         "title": "LADWP Energy Cost Calculator",
-        "description": "Set up LADWP Energy Cost Calculator to track electricity costs",
+        "description": "Pick the sensors that measure your home's electricity. Only the grid meter is required — it drives the bill. Solar and load are optional and add savings/usage breakdowns. Each field accepts either a power sensor (W/kW) or a cumulative energy sensor (Wh/kWh/MWh).",
         "data": {
           "name": "Name",
-          "grid_power_entity": "Grid Power Entity (required)",
-          "solar_power_entity": "Solar Power Entity (optional)",
-          "load_power_entity": "Load Power Entity (optional)",
+          "grid_power_entity": "Grid meter — net flow between your home and LADWP (required)",
+          "solar_power_entity": "Solar production — power your panels generate (optional)",
+          "load_power_entity": "Home consumption — total power your house uses (optional)",
           "rate_plan": "Electricity Rate Plan",
           "zone": "Service Zone",
           "billing_period": "Billing Period",
-          "billing_day": "Billing Cycle Start Day"
+          "billing_day": "Billing Cycle Start Day",
+          "grid_invert_sign": "My grid meter reports import as negative"
+        },
+        "data_description": {
+          "grid_power_entity": "The single bidirectional meter at your service point that measures net flow to/from the grid. Positive = importing (buying from LADWP), negative = exporting (sending excess solar back). This is the only sensor that determines your bill. On an Enphase/CT-clamp setup this is the grid (net) value, not the panel output.",
+          "solar_power_entity": "Your inverter's gross production — how much your panels are generating right now (always ≥ 0). Used only to estimate solar savings; it does not change the bill. On Enphase this is the production sensor.",
+          "load_power_entity": "Your whole-home draw — everything the house is using, whether sourced from solar or the grid (load = solar + grid import). Used only for the consumption breakdown; it does not change the bill.",
+          "grid_invert_sign": "Leave off if your grid sensor reads positive when importing from LADWP. Turn on only if your sensor is reversed (negative while importing), which would otherwise swap delivered and received."
         }
       }
     },
     "error": {
-      "grid_power_required": "Grid power entity is required"
+      "grid_power_required": "A grid meter entity is required — this is the sensor that measures net flow between your home and LADWP."
     },
     "abort": {
       "already_configured": "This sensor is already configured"
@@ -32,7 +39,11 @@
           "rate_plan": "Electricity Rate Plan",
           "zone": "Service Zone",
           "billing_period": "Billing Period",
-          "billing_day": "Billing Cycle Start Day"
+          "billing_day": "Billing Cycle Start Day",
+          "grid_invert_sign": "My grid meter reports import as negative"
+        },
+        "data_description": {
+          "grid_invert_sign": "Leave off if your grid sensor reads positive when importing from LADWP. Turn on only if it is reversed (negative while importing)."
         }
       }
     }
