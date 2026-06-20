@@ -22,18 +22,6 @@ UPDATE_INTERVAL_SECONDS = 60       # periodic tick: flush integration, persist, 
 MAX_INTEGRATION_GAP_HOURS = 6      # don't integrate power across gaps longer than this
 DEFAULT_GRID_INVERT_SIGN = False
 
-# One-time recorder seed.
-# On the first start after upgrading from the in-memory architecture there is no
-# persisted storage yet, so the current billing cycle would otherwise reset to
-# zero. When ONE_TIME_SEED_DATE is set, the coordinator instead restores each
-# accumulator from its sensor's recorded value at the (date, time) below. It runs
-# at most once (storage then becomes the source of truth) and is ignored entirely
-# once now is past the seed point by more than ONE_TIME_SEED_MAX_AGE_DAYS, so a
-# future fresh install never seeds to a stale date. Set the date to None to disable.
-ONE_TIME_SEED_DATE = (2026, 6, 19)   # restore point: 2026-06-19
-ONE_TIME_SEED_TIME = (14, 30)        # 2:30 PM local
-ONE_TIME_SEED_MAX_AGE_DAYS = 14
-
 # Time-of-use periods
 PERIODS = ["high_peak", "low_peak", "base"]
 

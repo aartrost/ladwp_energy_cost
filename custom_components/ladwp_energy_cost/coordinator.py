@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from functools import partial
 from typing import Any, Dict, Optional
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -50,9 +49,6 @@ from .const import (
     ENERGY_UNITS,
     MAX_INTEGRATION_GAP_HOURS,
     NET_METERING_CREDIT_RATE,
-    ONE_TIME_SEED_DATE,
-    ONE_TIME_SEED_MAX_AGE_DAYS,
-    ONE_TIME_SEED_TIME,
     PERIODS,
     POWER_UNITS,
     STORAGE_VERSION,
@@ -137,13 +133,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         Called once from ``async_setup_entry`` before the sensors are created so
         that ``self.data`` is already populated when the entities first render.
         """
-        restored = await self._async_restore()
-        if not restored:
-            # First run after upgrade: optionally seed accumulators from the
-            # recorder so values don't reset to zero mid-cycle.
-            target = self._one_time_seed_target()
-            if target is not None:
-                await self._async_seed_from_recorder(target)
+        await self._async_restore()
         self._prime_sources()
 
         self._unsub_state = async_track_state_change_event(
@@ -388,116 +378,6 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         _LOGGER.info(
             "Restored from storage: last_reset=%s, total_delivered=%.3f kWh",
             self.last_reset, self.data.get(ATTR_TOTAL_KWH_DELIVERED, 0.0),
-        )
-        return True
-
-    # ------------------------------------------------------- one-time seeding
-
-    def _one_time_seed_target(self) -> Optional[datetime]:
-        """Resolve the configured one-time seed point, or None if disabled/stale."""
-        if ONE_TIME_SEED_DATE is None:
-            return None
-        target = dt_util.start_of_local_day(
-            datetime(*ONE_TIME_SEED_DATE)
-        ) + timedelta(hours=ONE_TIME_SEED_TIME[0], minutes=ONE_TIME_SEED_TIME[1])
-        # Ignore a stale seed so a future fresh install never restores to an old date.
-        if dt_util.now() - target > timedelta(days=ONE_TIME_SEED_MAX_AGE_DAYS):
-            _LOGGER.debug("One-time seed target %s is stale; skipping", target)
-            return None
-        return target
-
-    def _output_sensor_map(self) -> Dict[str, str]:
-        """Map each output sensor's unique_id to the accumulator key it reflects."""
-        g = self.grid_entity_id.replace(".", "_")
-        mapping: Dict[str, str] = {}
-        for p in PERIODS:
-            mapping[f"ladwp_{p}_delivered_{g}"] = f"{p}_kwh_delivered"
-            mapping[f"ladwp_{p}_received_{g}"] = f"{p}_kwh_received"
-            mapping[f"ladwp_{p}_cost_{g}"] = f"{p}_cost"
-        mapping[f"ladwp_total_delivered_{g}"] = ATTR_TOTAL_KWH_DELIVERED
-        mapping[f"ladwp_total_received_{g}"] = ATTR_TOTAL_KWH_RECEIVED
-
-        if self.solar_entity_id:
-            s = self.solar_entity_id.replace(".", "_")
-            for p in PERIODS:
-                mapping[f"ladwp_{p}_solar_{s}"] = f"{p}_kwh_generated"
-            mapping[f"ladwp_total_solar_{s}"] = ATTR_TOTAL_KWH_GENERATED
-            mapping[f"ladwp_solar_savings_{s}"] = ATTR_SOLAR_COST_SAVINGS
-
-        if self.load_entity_id:
-            ld = self.load_entity_id.replace(".", "_")
-            for p in PERIODS:
-                mapping[f"ladwp_{p}_load_{ld}"] = f"{p}_kwh_consumed"
-            mapping[f"ladwp_total_load_{ld}"] = ATTR_TOTAL_KWH_CONSUMED
-            mapping[f"ladwp_load_cost_{ld}"] = ATTR_LOAD_COST
-
-        # Net and total-net are derived in _recompute, so they aren't seeded directly.
-        return mapping
-
-    async def _async_seed_from_recorder(self, target: datetime) -> bool:
-        """Seed accumulators from each sensor's recorded value at ``target``.
-
-        Relies on unique_ids being unchanged across the upgrade, so the prior
-        entities are still in the registry and the recorder still holds their
-        history. Net energy and grid costs are recomputed from the seeded
-        delivered/received buckets for internal consistency.
-        """
-        from homeassistant.components.recorder import get_instance
-        from homeassistant.components.recorder.history import get_significant_states
-        from homeassistant.helpers import entity_registry as er
-
-        registry = er.async_get(self.hass)
-        resolved: Dict[str, str] = {}  # entity_id -> accumulator key
-        for unique_id, key in self._output_sensor_map().items():
-            entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
-            if entity_id:
-                resolved[entity_id] = key
-
-        if not resolved:
-            _LOGGER.warning(
-                "One-time seed: no existing LADWP sensors found to restore from"
-            )
-            return False
-
-        # include_start_time_state=True returns the state in effect exactly at target.
-        fetch = partial(
-            get_significant_states,
-            self.hass,
-            target,
-            target + timedelta(seconds=1),
-            list(resolved),
-            include_start_time_state=True,
-        )
-        try:
-            history = await get_instance(self.hass).async_add_executor_job(fetch)
-        except Exception as err:  # noqa: BLE001 - recorder may be unavailable
-            _LOGGER.warning("One-time seed: recorder query failed: %s", err)
-            return False
-
-        seeded = 0
-        for entity_id, key in resolved.items():
-            states = history.get(entity_id)
-            if not states:
-                continue
-            try:
-                self.data[key] = float(states[0].state)
-                seeded += 1
-            except (ValueError, TypeError):
-                continue
-
-        if not seeded:
-            _LOGGER.warning(
-                "One-time seed: found sensors but no usable recorded values at %s",
-                target.isoformat(),
-            )
-            return False
-
-        self._recompute(dt_util.now())
-        await self._async_save()
-        _LOGGER.info(
-            "One-time seed: restored %d accumulators to their %s values "
-            "(total_delivered=%.3f kWh)",
-            seeded, target.isoformat(), self.data.get(ATTR_TOTAL_KWH_DELIVERED, 0.0),
         )
         return True
 
