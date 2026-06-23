@@ -337,7 +337,9 @@ class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._config = config
-        self._attr_name = f"{name} {description.name}"
+        # Title is just the descriptor (e.g. "Base Energy Delivered"); the
+        # instance name lives on the device, not prefixed onto every entity.
+        self._attr_name = description.name
         self._attr_unique_id = description.unique_id
         self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
 
@@ -391,7 +393,7 @@ class LADWPRateUpdateSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], Senso
         grid_entity_id: str,
     ) -> None:
         super().__init__(coordinator)
-        self._attr_name = f"{name} Rate Last Updated"
+        self._attr_name = "Rate Last Updated"
         self._attr_unique_id = f"ladwp_rate_last_updated_{grid_entity_id.replace('.', '_')}"
         self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
 
