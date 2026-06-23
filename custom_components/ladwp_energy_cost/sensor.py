@@ -8,7 +8,7 @@ so existing history and Energy-dashboard configuration carry over untouched.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -66,6 +66,7 @@ class LADWPSensorDescription(SensorEntityDescription):
     data_key: Optional[str] = None
     round_digits: int = 3
     has_last_reset: bool = False
+    lifetime: bool = False  # read lifetime[key] + data[key] from the coordinator
     value_fn: Optional[Callable[[Dict[str, Any]], float]] = None
     extra_attrs_fn: Optional[Callable[["LADWPSensor"], Dict[str, Any]]] = None
 
@@ -297,10 +298,15 @@ async def async_setup_entry(
     solar = config.get(CONF_SOLAR_ENERGY_ENTITY)
     load = config.get(CONF_LOAD_ENERGY_ENTITY)
 
-    descriptions = _build_descriptions(grid, solar, load)
-    entities: List[SensorEntity] = [
-        LADWPSensor(coordinator, name, grid, config, desc) for desc in descriptions
-    ]
+    # One base set; render it twice — per billing cycle (resets) and lifetime
+    # (never resets, separate device) — with clear "(Cycle)"/"(Lifetime)" labels.
+    base = _build_descriptions(grid, solar, load)
+    entities: List[SensorEntity] = []
+    for desc in base:  # per-cycle set on the "Current Billing Cycle" device
+        entities.append(LADWPSensor(coordinator, name, grid, config, desc))
+    for desc in base:  # lifetime set on the "Lifetime" device (same sensor names)
+        entities.append(LADWPSensor(coordinator, name, grid, config, _as_lifetime(desc)))
+
     # Diagnostic timestamps: when rates last changed, and when last checked.
     entities.append(
         LADWPRateTimestampSensor(
@@ -326,12 +332,29 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-def _ladwp_device_info(name: str, grid_entity_id: str) -> DeviceInfo:
-    """Shared device info so every sensor lands on the one integration device."""
-    device_id = f"ladwp_energy_cost_{grid_entity_id.replace('.', '_')}"
+def _as_lifetime(desc: LADWPSensorDescription) -> LADWPSensorDescription:
+    """The never-reset variant on its own device — same sensor name, new unique_id."""
+    return replace(
+        desc,
+        key=f"lifetime_{desc.key}",
+        unique_id=desc.unique_id.replace("ladwp_", "ladwp_lifetime_", 1),
+        lifetime=True,
+        has_last_reset=False,   # lifetime never resets
+        extra_attrs_fn=None,    # last_reset/billing metadata is cycle-specific
+    )
+
+
+def _ladwp_device_info(grid_entity_id: str, lifetime: bool = False) -> DeviceInfo:
+    """Device info: the 'Current Billing Cycle' device or the 'Lifetime' device.
+
+    The device name carries the cycle-vs-lifetime distinction, so the sensors on
+    each keep identical (unprefixed) names.
+    """
+    g = grid_entity_id.replace(".", "_")
+    suffix = "lifetime_" if lifetime else ""
     return DeviceInfo(
-        identifiers={(DOMAIN, device_id)},
-        name=name,
+        identifiers={(DOMAIN, f"ladwp_energy_cost_{suffix}{g}")},
+        name="Lifetime" if lifetime else "Current Billing Cycle",
         manufacturer="LADWP",
         model="Energy Cost Calculator",
         sw_version=VERSION,
@@ -360,13 +383,20 @@ class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
         # instance name lives on the device, not prefixed onto every entity.
         self._attr_name = description.name
         self._attr_unique_id = description.unique_id
-        self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
+        self._attr_device_info = _ladwp_device_info(
+            grid_entity_id, lifetime=description.lifetime
+        )
 
     @property
     def native_value(self) -> float:
-        """Return the current value, computed or read straight from the dict."""
-        data = self.coordinator.data or {}
+        """Return the value: current cycle, or lifetime (completed + current)."""
         desc = self.entity_description
+        if desc.lifetime:
+            done = self.coordinator.lifetime or {}
+            cur = self.coordinator.data or {}
+            data = {k: done.get(k, 0.0) + cur.get(k, 0.0) for k in done.keys() | cur.keys()}
+        else:
+            data = self.coordinator.data or {}
         if desc.value_fn is not None:
             value = desc.value_fn(data)
         else:
@@ -421,7 +451,7 @@ class LADWPRateTimestampSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], Se
         self._attr_name = title
         self._attr_icon = icon
         self._attr_unique_id = f"ladwp_{unique_suffix}_{grid_entity_id.replace('.', '_')}"
-        self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
+        self._attr_device_info = _ladwp_device_info(grid_entity_id)
 
     @property
     def native_value(self) -> Optional[datetime]:

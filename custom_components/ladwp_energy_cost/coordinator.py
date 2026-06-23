@@ -105,6 +105,10 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
         self.last_reset = self._get_billing_cycle_start()
         self.data = self._init_energy_data()
+        # Lifetime accumulators of COMPLETED billing cycles (never reset). The
+        # live lifetime value of any key is lifetime[key] + data[key], so each
+        # completed cycle is captured at its final computed cost at reset time.
+        self.lifetime = self._init_energy_data()
 
         # Build the source list (grid is required; solar/load optional).
         self._sources: Dict[str, _Source] = {
@@ -301,13 +305,22 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         self.async_set_updated_data(self.data)
 
     async def _async_update_data(self) -> Dict[str, Any]:
-        """Periodic tick: roll the billing cycle, recompute costs, and persist."""
+        """Periodic tick: roll the billing cycle if due, recompute, and persist."""
         now = dt_util.now()
 
-        if now >= self._get_next_reset_time():
-            _LOGGER.info("Resetting energy data for new billing cycle")
+        # A new billing cycle has begun when its start is later than our last
+        # reset. (Checked this way so it fires reliably the moment the billing
+        # day is crossed.)
+        cycle_start = self._get_billing_cycle_start()
+        if cycle_start > self.last_reset:
+            _LOGGER.info("New billing cycle started %s; rolling totals into lifetime", cycle_start)
+            # Roll the completed cycle's totals into the lifetime accumulators
+            # (capturing this cycle's final computed costs) before zeroing.
+            self._recompute(now)
+            for key, value in self.data.items():
+                self.lifetime[key] = self.lifetime.get(key, 0.0) + value
             self.data = self._init_energy_data()
-            self.last_reset = self._get_billing_cycle_start()
+            self.last_reset = cycle_start
 
         # Recompute so period costs track the current rate as time passes, even
         # without a counter change, then persist.
@@ -324,23 +337,13 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         """
         stored = await self._store.async_load()
         if not stored:
-            _LOGGER.info("No stored data; starting a fresh billing cycle")
+            _LOGGER.info("No stored data; starting fresh")
             return False
 
-        stored_reset = dt_util.parse_datetime(stored.get("last_reset", "") or "")
-        cycle_start = self._get_billing_cycle_start()
-        if not stored_reset or stored_reset < cycle_start:
-            _LOGGER.info(
-                "Stored data is from a previous billing cycle (stored=%s, current=%s);"
-                " starting fresh",
-                stored_reset, cycle_start,
-            )
-            return False
-
-        self.last_reset = stored_reset
-        restored = self._init_energy_data()
-        restored.update(stored.get("data", {}))
-        self.data = restored
+        # Lifetime accumulators span billing cycles — always restore them.
+        lifetime = self._init_energy_data()
+        lifetime.update(stored.get("lifetime", {}))
+        self.lifetime = lifetime
 
         # Restore each counter's last reading so the next delta correctly
         # includes any energy used during downtime.
@@ -351,10 +354,31 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             src.factor = saved.get("factor")
             src.last_value = saved.get("last_value")
 
-        _LOGGER.info(
-            "Restored from storage: last_reset=%s, total_delivered=%.3f kWh",
-            self.last_reset, self.data.get(ATTR_TOTAL_KWH_DELIVERED, 0.0),
-        )
+        stored_reset = dt_util.parse_datetime(stored.get("last_reset", "") or "")
+        cycle_start = self._get_billing_cycle_start()
+        stored_data = stored.get("data", {})
+
+        if stored_reset and stored_reset >= cycle_start:
+            # Same billing cycle — restore the in-progress cycle data.
+            restored = self._init_energy_data()
+            restored.update(stored_data)
+            self.data = restored
+            self.last_reset = stored_reset
+            _LOGGER.info(
+                "Restored current cycle + lifetime: cycle_delivered=%.3f, "
+                "lifetime_delivered=%.3f kWh",
+                self.data.get(ATTR_TOTAL_KWH_DELIVERED, 0.0),
+                self.lifetime.get(ATTR_TOTAL_KWH_DELIVERED, 0.0),
+            )
+        else:
+            # The billing cycle rolled over while offline: fold the stored cycle
+            # into lifetime, then start the new cycle's data from zero.
+            for key, value in stored_data.items():
+                self.lifetime[key] = self.lifetime.get(key, 0.0) + value
+            self.data = self._init_energy_data()
+            self.last_reset = cycle_start
+            _LOGGER.info("Billing cycle rolled over while offline; folded into lifetime")
+
         return True
 
     def _prime_sources(self) -> None:
@@ -372,11 +396,12 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         self._recompute(now)
 
     async def _async_save(self) -> None:
-        """Persist accumulators and each counter's last reading."""
+        """Persist accumulators (cycle + lifetime) and each counter's reading."""
         await self._store.async_save(
             {
                 "last_reset": self.last_reset.isoformat(),
                 "data": self.data,
+                "lifetime": self.lifetime,
                 "sources": {
                     s.entity_id: {
                         "factor": s.factor,
@@ -402,14 +427,4 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             return dt_util.start_of_local_day(datetime(now.year, now.month, day))
         month = now.month - 1 if now.month > 1 else 12
         year = now.year if now.month > 1 else now.year - 1
-        return dt_util.start_of_local_day(datetime(year, month, day))
-
-    def _get_next_reset_time(self) -> datetime:
-        """Return when the next billing cycle reset is due."""
-        now = dt_util.now()
-        day = self.billing_day
-        if now.day < day:
-            return dt_util.start_of_local_day(datetime(now.year, now.month, day))
-        month = now.month + 1 if now.month < 12 else 1
-        year = now.year if now.month < 12 else now.year + 1
         return dt_util.start_of_local_day(datetime(year, month, day))
