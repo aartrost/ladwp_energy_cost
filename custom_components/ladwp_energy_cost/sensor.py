@@ -301,7 +301,26 @@ async def async_setup_entry(
     entities: List[SensorEntity] = [
         LADWPSensor(coordinator, name, grid, config, desc) for desc in descriptions
     ]
-    entities.append(LADWPRateUpdateSensor(coordinator, name, grid))
+    # Diagnostic timestamps: when rates last changed, and when last checked.
+    entities.append(
+        LADWPRateTimestampSensor(
+            coordinator, name, grid,
+            title="Last LADWP Rate change",
+            unique_suffix="rate_last_updated",
+            status_key="last_changed",
+            icon="mdi:cash-clock",
+            with_change_count=True,
+        )
+    )
+    entities.append(
+        LADWPRateTimestampSensor(
+            coordinator, name, grid,
+            title="Last LADWP Rate check",
+            unique_suffix="rates_last_checked",
+            status_key="last_checked",
+            icon="mdi:cloud-check-outline",
+        )
+    )
 
     _LOGGER.debug("Adding %d LADWP sensors", len(entities))
     async_add_entities(entities)
@@ -372,43 +391,49 @@ class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
         return {}
 
 
-class LADWPRateUpdateSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
-    """Diagnostic sensor: when the rate tables last actually changed.
+class LADWPRateTimestampSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
+    """A diagnostic timestamp drawn from the coordinator's rate-update status.
 
-    State = timestamp of the last update that changed a rate (None if rates have
-    never changed on this install). Attributes expose the last time a check ran
-    and how many values changed, so you can see the updater is working even when
-    nothing needed changing.
+    Used for two distinct entities: when rates last *changed* (last_changed) and
+    when a fetch was last *attempted* (last_checked). Both being timestamps, they
+    share this class — only the status key, title, and unique_id differ.
     """
 
     _attr_has_entity_name = False
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_icon = "mdi:cash-clock"
 
     def __init__(
         self,
         coordinator: LADWPEnergyDataCoordinator,
         name: str,
         grid_entity_id: str,
+        *,
+        title: str,
+        unique_suffix: str,
+        status_key: str,
+        icon: str,
+        with_change_count: bool = False,
     ) -> None:
         super().__init__(coordinator)
-        self._attr_name = "Rate Last Updated"
-        self._attr_unique_id = f"ladwp_rate_last_updated_{grid_entity_id.replace('.', '_')}"
+        self._status_key = status_key
+        self._with_change_count = with_change_count
+        self._attr_name = title
+        self._attr_icon = icon
+        self._attr_unique_id = f"ladwp_{unique_suffix}_{grid_entity_id.replace('.', '_')}"
         self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
 
     @property
     def native_value(self) -> Optional[datetime]:
-        """Timestamp of the last rate change, or None if never changed."""
-        ts = (self.coordinator.rate_status or {}).get("last_changed")
+        """Return the configured status timestamp, or None if not set yet."""
+        ts = (self.coordinator.rate_status or {}).get(self._status_key)
         return dt_util.parse_datetime(ts) if ts else None
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Expose the last check time and how much changed."""
-        status = self.coordinator.rate_status or {}
-        checked = status.get("last_checked")
+        """Expose how many values changed (only on the 'last updated' sensor)."""
+        if not self._with_change_count:
+            return {}
         return {
-            "last_checked": dt_util.parse_datetime(checked) if checked else None,
-            "last_change_count": status.get("last_change_count", 0),
+            "last_change_count": (self.coordinator.rate_status or {}).get("last_change_count", 0),
         }

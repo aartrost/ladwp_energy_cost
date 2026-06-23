@@ -56,6 +56,8 @@ async def _async_fetch_html(hass: HomeAssistant) -> str | None:
     """Fetch the rates page. Try aiohttp first, then curl in an executor."""
     import aiohttp
 
+    _LOGGER.info("Fetching LADWP rate page: %s", LADWP_RATES_URL)
+
     session = async_get_clientsession(hass)
     headers = {"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"}
     try:
@@ -65,12 +67,27 @@ async def _async_fetch_html(hass: HomeAssistant) -> str | None:
             if resp.status == 200:
                 text = await resp.text()
                 if "<table" in text:
+                    _LOGGER.info(
+                        "LADWP rate fetch OK via aiohttp (HTTP 200, %d bytes)", len(text)
+                    )
                     return text
-            _LOGGER.debug("aiohttp rate fetch returned HTTP %s; trying curl", resp.status)
+                _LOGGER.warning(
+                    "LADWP rate fetch via aiohttp got HTTP 200 but no tables in the "
+                    "page body; trying curl"
+                )
+            else:
+                _LOGGER.warning(
+                    "LADWP rate fetch via aiohttp returned HTTP %s; trying curl", resp.status
+                )
     except Exception as err:  # noqa: BLE001 - any network error falls through to curl
-        _LOGGER.debug("aiohttp rate fetch failed (%s); trying curl", err)
+        _LOGGER.warning("LADWP rate fetch via aiohttp failed (%s); trying curl", err)
 
-    return await hass.async_add_executor_job(_curl_fetch)
+    html = await hass.async_add_executor_job(_curl_fetch)
+    if html:
+        _LOGGER.info("LADWP rate fetch OK via curl (%d bytes)", len(html))
+    else:
+        _LOGGER.warning("LADWP rate fetch failed via both aiohttp and curl")
+    return html
 
 
 def _curl_fetch() -> str | None:
@@ -179,7 +196,7 @@ async def async_refresh_rates(hass: HomeAssistant, *, reason: str) -> int:
     _clear_warning(hass)
 
     if not changes:
-        _LOGGER.debug("Rate update (%s): already current, no changes", reason)
+        _LOGGER.info("Rate update (%s): fetch OK — rates already current, no changes", reason)
         return 0
 
     base["generated_at"] = dt_util.utcnow().isoformat(timespec="seconds")
@@ -258,11 +275,31 @@ async def async_init_rates(hass: HomeAssistant, entry, coordinator) -> None:
             "Home Assistant will keep retrying."
         )
 
-    # Rate checking is always on: catch up if overdue, then re-check weekly.
+    # Rate checking is always on: catch up only if the last check is overdue,
+    # then re-check on the weekly interval. A plain restart within the interval
+    # must NOT trigger a fetch. ("last_fetch" is read as a legacy fallback so an
+    # upgrade from an older key name doesn't cause a spurious catch-up.)
     interval = timedelta(days=RATES_REFRESH_INTERVAL_DAYS)
-    last = dt_util.parse_datetime(meta.get("last_checked", "") or "")
-    if not did_fetch and (last is None or dt_util.utcnow() - last >= interval):
+    last = dt_util.parse_datetime(
+        meta.get("last_checked") or meta.get("last_fetch") or ""
+    )
+    if did_fetch:
+        pass  # already fetched above; don't double up
+    elif last is None:
+        _LOGGER.info("No record of a previous rate check; fetching now")
+        await _run_check(hass, store, meta, coordinator, reason="initial check")
+    elif dt_util.utcnow() - last >= interval:
+        age = dt_util.utcnow() - last
+        _LOGGER.info(
+            "Last rate check was %s ago (>= %s interval); refreshing", age, interval
+        )
         await _run_check(hass, store, meta, coordinator, reason="scheduled catch-up")
+    else:
+        age = dt_util.utcnow() - last
+        _LOGGER.info(
+            "Skipping rate fetch on startup — last check was %s ago, within the %s "
+            "interval", age, interval,
+        )
 
     @callback
     def _scheduled(_now) -> None:
