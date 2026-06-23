@@ -217,6 +217,9 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
     def _account(self, role: str, kwh_increment: float, when: datetime) -> None:
         """Route a signed kWh increment into the right buckets."""
+        # State timestamps (e.g. last_updated) are UTC; TOU periods are local wall
+        # time, so convert before classifying or the period is hours off.
+        when = dt_util.as_local(when)
         period = rates.get_time_period(when)
         net_so_far = (
             self.data[ATTR_TOTAL_KWH_DELIVERED] - self.data[ATTR_TOTAL_KWH_RECEIVED]
@@ -267,6 +270,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
     def _recompute(self, now: datetime) -> None:
         """Recalculate net energy and grid period costs from the buckets."""
+        now = dt_util.as_local(now)  # rate lookup needs local wall time, not UTC
         net_total = (
             self.data[ATTR_TOTAL_KWH_DELIVERED] - self.data[ATTR_TOTAL_KWH_RECEIVED]
         )
