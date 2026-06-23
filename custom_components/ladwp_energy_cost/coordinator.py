@@ -1,16 +1,16 @@
-"""Event-driven energy integration engine for LADWP Energy Cost.
+"""Energy metering engine for LADWP Energy Cost.
 
 Design
 ------
-The source entities are either *power* (W/kW/MW — an instantaneous rate) or
-*energy* (Wh/kWh/MWh — a cumulative counter). Rather than sampling power once a
-minute and pretending it held constant, this coordinator:
+Every source entity is a cumulative *energy* counter (Wh/kWh/MWh). On each
+state-change event the coordinator takes the delta of the counter — no time
+integration, since the meter already did that. Power (W/kW) sensors are not
+supported; feed an energy sensor (e.g. a Riemann-sum / utility-meter helper if
+you only have power).
 
-* subscribes to source state-change events and integrates power with a
-  left-Riemann sum over the *actual* elapsed time between readings (the same
-  approach Home Assistant's own ``integration`` / ``utility_meter`` use), and
-* takes plain deltas of the counter for energy entities (no time term — the
-  meter already did the integrating).
+The grid counter is treated as signed net energy: an increase is import
+(delivered), a decrease is export (received). Solar and load counters only ever
+rise, so a decrease there is treated as a meter reset and ignored.
 
 All accumulators live in ``self.data`` and are persisted to ``Store`` on every
 periodic tick and on Home Assistant shutdown, then restored verbatim on startup.
@@ -47,9 +47,7 @@ from .const import (
     DEFAULT_ZONE,
     DOMAIN,
     ENERGY_UNITS,
-    MAX_INTEGRATION_GAP_HOURS,
     PERIODS,
-    POWER_UNITS,
     STORAGE_VERSION,
     UPDATE_INTERVAL_SECONDS,
 )
@@ -63,17 +61,15 @@ ROLE_LOAD = "load"
 
 
 class _Source:
-    """Tracks one input entity's classification and last-seen reading."""
+    """Tracks one input energy counter and its last-seen reading (in kWh)."""
 
-    __slots__ = ("entity_id", "role", "kind", "factor", "last_value", "last_time")
+    __slots__ = ("entity_id", "role", "factor", "last_value")
 
     def __init__(self, entity_id: str, role: str) -> None:
         self.entity_id = entity_id
         self.role = role
-        self.kind: Optional[str] = None       # "power" | "energy" | None (unknown)
-        self.factor: float = 1.0              # to W (power) or to kWh (energy)
-        self.last_value: Optional[float] = None  # normalized: W for power, kWh for energy
-        self.last_time: Optional[datetime] = None
+        self.factor: Optional[float] = None   # unit -> kWh; None until classified
+        self.last_value: Optional[float] = None  # last counter reading, in kWh
 
 
 class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
@@ -190,30 +186,24 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         return data
 
     @staticmethod
-    def _classify(unit: Optional[str]):
-        """Return ('power'|'energy', factor) for a unit, or (None, 1.0)."""
+    def _energy_factor(unit: Optional[str]) -> Optional[float]:
+        """Return the unit -> kWh factor for an energy unit, or None if not energy."""
         if not unit:
-            return None, 1.0
-        u = unit.lower()
-        if u in POWER_UNITS:
-            return "power", POWER_UNITS[u]
-        if u in ENERGY_UNITS:
-            return "energy", ENERGY_UNITS[u]
-        return None, 1.0
+            return None
+        return ENERGY_UNITS.get(unit.lower())
 
-    def _read_source(self, src: _Source):
-        """Read and normalize a source's current value. Returns float or None."""
+    def _read_source(self, src: _Source) -> Optional[float]:
+        """Read a source's counter and normalize it to kWh. Returns None if invalid."""
         state = self.hass.states.get(src.entity_id)
         if state is None or state.state in ("unknown", "unavailable", "", None):
             return None
-        # (Re)classify from the live unit if we haven't yet.
-        if src.kind is None:
-            src.kind, src.factor = self._classify(
-                state.attributes.get("unit_of_measurement")
-            )
-        if src.kind is None:
+        # Classify from the live unit if we haven't yet.
+        if src.factor is None:
+            src.factor = self._energy_factor(state.attributes.get("unit_of_measurement"))
+        if src.factor is None:
             _LOGGER.warning(
-                "Entity %s has no recognized power/energy unit (%s); ignoring",
+                "Entity %s is not a recognized energy sensor (unit=%s); expected "
+                "Wh/kWh/MWh. Ignoring.",
                 src.entity_id, state.attributes.get("unit_of_measurement"),
             )
             return None
@@ -257,23 +247,15 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             self.data[ATTR_TOTAL_KWH_CONSUMED] += used
             self.data[ATTR_LOAD_COST] += used * rate
 
-    def _integrate_power(self, src: _Source, until: datetime) -> None:
-        """Left-Riemann integrate a power source up to ``until`` and advance it."""
-        if src.last_value is None or src.last_time is None:
-            src.last_time = until
-            return
-        dt_hours = (until - src.last_time).total_seconds() / 3600.0
-        if dt_hours <= 0:
-            return
-        if dt_hours <= MAX_INTEGRATION_GAP_HOURS:
-            kwh = src.last_value / 1000.0 * dt_hours  # last_value is in W
-            self._account(src.role, kwh, until)
-        else:
-            _LOGGER.debug(
-                "Skipping %.1fh integration gap for %s (likely downtime)",
-                dt_hours, src.entity_id,
-            )
-        src.last_time = until
+    def _apply_counter(self, src: _Source, value: float, when: datetime) -> None:
+        """Account the delta of an energy counter since its last reading."""
+        if src.last_value is not None:
+            delta = value - src.last_value
+            # The grid counter is signed (a drop = export). Solar/load counters
+            # only rise, so a drop there is a meter reset — ignore it.
+            if src.role == ROLE_GRID or delta >= 0:
+                self._account(src.role, delta, when)
+        src.last_value = value
 
     def _recompute(self, now: datetime) -> None:
         """Recalculate net energy and grid period costs from the buckets.
@@ -300,7 +282,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
     @callback
     def _handle_state_event(self, event: Event) -> None:
-        """Integrate a single source state change and push an update."""
+        """Account a single source counter change and push an update."""
         entity_id = event.data.get("entity_id")
         src = self._sources.get(entity_id)
         if src is None:
@@ -314,25 +296,12 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         if value is None:
             return
 
-        if src.kind == "power":
-            # Integrate the interval that just ended, then adopt the new rate.
-            self._integrate_power(src, now)
-            src.last_value = value
-        else:  # energy counter
-            if src.last_value is not None:
-                delta = value - src.last_value
-                # Grid may legitimately decrease (signed net counter / export);
-                # solar and load counters only ever rise, so a drop is a reset.
-                if src.role == ROLE_GRID or delta >= 0:
-                    self._account(src.role, delta, now)
-            src.last_value = value
-            src.last_time = now
-
+        self._apply_counter(src, value, now)
         self._recompute(now)
         self.async_set_updated_data(self.data)
 
     async def _async_update_data(self) -> Dict[str, Any]:
-        """Periodic tick: roll the billing cycle, flush integration, persist."""
+        """Periodic tick: roll the billing cycle, recompute costs, and persist."""
         now = dt_util.now()
 
         if now >= self._get_next_reset_time():
@@ -340,12 +309,8 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
             self.data = self._init_energy_data()
             self.last_reset = self._get_billing_cycle_start()
 
-        # Flush any power source forward to now so steady loads keep accruing
-        # even when the source isn't emitting fresh state changes.
-        for src in self._sources.values():
-            if src.kind == "power":
-                self._integrate_power(src, now)
-
+        # Recompute so period costs track the current rate as time passes, even
+        # without a counter change, then persist.
         self._recompute(now)
         await self._async_save()
         return self.data
@@ -377,17 +342,14 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         restored.update(stored.get("data", {}))
         self.data = restored
 
-        # Restore source cursors. Power sources clear last_time so we don't
-        # integrate across the restart gap; energy sources keep last_value so the
-        # next delta correctly includes any consumption during downtime.
+        # Restore each counter's last reading so the next delta correctly
+        # includes any energy used during downtime.
         for entity_id, saved in (stored.get("sources") or {}).items():
             src = self._sources.get(entity_id)
             if not src:
                 continue
-            src.kind = saved.get("kind")
-            src.factor = saved.get("factor", 1.0)
+            src.factor = saved.get("factor")
             src.last_value = saved.get("last_value")
-            src.last_time = None
 
         _LOGGER.info(
             "Restored from storage: last_reset=%s, total_delivered=%.3f kWh",
@@ -396,36 +358,29 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         return True
 
     def _prime_sources(self) -> None:
-        """Establish a baseline reading for each source at startup.
+        """Establish a baseline reading for each counter at startup.
 
-        Energy sources whose counter advanced during downtime get that delta
-        accounted immediately; power sources just seed their current rate.
+        A counter that advanced during downtime gets that delta accounted
+        immediately (vs the restored last_value).
         """
         now = dt_util.now()
         for src in self._sources.values():
             value = self._read_source(src)
             if value is None:
                 continue
-            if src.kind == "energy" and src.last_value is not None:
-                delta = value - src.last_value
-                if src.role == ROLE_GRID or delta >= 0:
-                    self._account(src.role, delta, now)
-            src.last_value = value
-            src.last_time = now
+            self._apply_counter(src, value, now)
         self._recompute(now)
 
     async def _async_save(self) -> None:
-        """Persist accumulators and source cursors."""
+        """Persist accumulators and each counter's last reading."""
         await self._store.async_save(
             {
                 "last_reset": self.last_reset.isoformat(),
                 "data": self.data,
                 "sources": {
                     s.entity_id: {
-                        "kind": s.kind,
                         "factor": s.factor,
                         "last_value": s.last_value,
-                        "last_time": s.last_time.isoformat() if s.last_time else None,
                     }
                     for s in self._sources.values()
                 },
@@ -434,12 +389,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
     async def _handle_shutdown(self, _event: Event) -> None:
         """Persist a final snapshot when Home Assistant stops."""
-        # Flush power integration up to the shutdown instant first.
-        now = dt_util.now()
-        for src in self._sources.values():
-            if src.kind == "power":
-                self._integrate_power(src, now)
-        self._recompute(now)
+        self._recompute(dt_util.now())
         await self._async_save()
 
     # --------------------------------------------------------- billing cycle

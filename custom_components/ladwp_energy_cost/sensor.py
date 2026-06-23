@@ -37,10 +37,10 @@ from .const import (
     ATTR_TOTAL_KWH_RECEIVED,
     CONF_BILLING_DAY,
     CONF_BILLING_PERIOD,
-    CONF_GRID_POWER_ENTITY,
-    CONF_LOAD_POWER_ENTITY,
+    CONF_GRID_ENERGY_ENTITY,
+    CONF_LOAD_ENERGY_ENTITY,
     CONF_RATE_PLAN,
-    CONF_SOLAR_POWER_ENTITY,
+    CONF_SOLAR_ENERGY_ENTITY,
     CONF_ZONE,
     DEFAULT_BILLING_DAY,
     DEFAULT_BILLING_PERIOD,
@@ -293,9 +293,9 @@ async def async_setup_entry(
     # Options override the original setup data (rate plan, zone, billing, etc.).
     config = {**entry.data, **entry.options}
     name = config.get(CONF_NAME, DEFAULT_NAME)
-    grid = config.get(CONF_GRID_POWER_ENTITY)
-    solar = config.get(CONF_SOLAR_POWER_ENTITY)
-    load = config.get(CONF_LOAD_POWER_ENTITY)
+    grid = config.get(CONF_GRID_ENERGY_ENTITY)
+    solar = config.get(CONF_SOLAR_ENERGY_ENTITY)
+    load = config.get(CONF_LOAD_ENERGY_ENTITY)
 
     descriptions = _build_descriptions(grid, solar, load)
     entities: List[SensorEntity] = [

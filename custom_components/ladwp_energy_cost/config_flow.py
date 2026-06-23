@@ -13,10 +13,10 @@ from .const import (
     CONF_BILLING_DAY,
     CONF_BILLING_PERIOD,
     CONF_GRID_INVERT_SIGN,
-    CONF_GRID_POWER_ENTITY,
-    CONF_LOAD_POWER_ENTITY,
+    CONF_GRID_ENERGY_ENTITY,
+    CONF_LOAD_ENERGY_ENTITY,
     CONF_RATE_PLAN,
-    CONF_SOLAR_POWER_ENTITY,
+    CONF_SOLAR_ENERGY_ENTITY,
     CONF_ZONE,
     DEFAULT_BILLING_DAY,
     DEFAULT_BILLING_PERIOD,
@@ -30,9 +30,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Accept both power and energy sensors; the engine detects which by unit.
+# Only cumulative energy sensors (Wh/kWh/MWh) are supported — filter the picker
+# to the energy device class.
 _ENTITY_SELECTOR = selector.EntitySelector(
-    selector.EntitySelectorConfig(domain="sensor")
+    selector.EntitySelectorConfig(domain="sensor", device_class="energy")
 )
 
 
@@ -46,8 +47,8 @@ class LADWPEnergyConfigFlow(config_entries.ConfigFlow, domain="ladwp_energy_cost
         errors = {}
 
         if user_input is not None:
-            if not user_input.get(CONF_GRID_POWER_ENTITY):
-                errors[CONF_GRID_POWER_ENTITY] = "grid_power_required"
+            if not user_input.get(CONF_GRID_ENERGY_ENTITY):
+                errors[CONF_GRID_ENERGY_ENTITY] = "grid_energy_required"
             if not errors:
                 return self.async_create_entry(
                     title=user_input.get("name", DEFAULT_NAME),
@@ -57,9 +58,9 @@ class LADWPEnergyConfigFlow(config_entries.ConfigFlow, domain="ladwp_energy_cost
         schema = vol.Schema(
             {
                 vol.Required("name", default=DEFAULT_NAME): str,
-                vol.Required(CONF_GRID_POWER_ENTITY): _ENTITY_SELECTOR,
-                vol.Optional(CONF_SOLAR_POWER_ENTITY): _ENTITY_SELECTOR,
-                vol.Optional(CONF_LOAD_POWER_ENTITY): _ENTITY_SELECTOR,
+                vol.Required(CONF_GRID_ENERGY_ENTITY): _ENTITY_SELECTOR,
+                vol.Optional(CONF_SOLAR_ENERGY_ENTITY): _ENTITY_SELECTOR,
+                vol.Optional(CONF_LOAD_ENERGY_ENTITY): _ENTITY_SELECTOR,
                 vol.Required(
                     CONF_RATE_PLAN, default=DEFAULT_RATE_PLAN
                 ): selector.SelectSelector(

@@ -9,14 +9,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
-    CONF_GRID_POWER_ENTITY,
-    CONF_LOAD_POWER_ENTITY,
-    CONF_SOLAR_POWER_ENTITY,
+    CONF_GRID_ENERGY_ENTITY,
+    CONF_LOAD_ENERGY_ENTITY,
+    CONF_SOLAR_ENERGY_ENTITY,
     DOMAIN,
 )
 from .coordinator import LADWPEnergyDataCoordinator
 
-TO_REDACT = {CONF_GRID_POWER_ENTITY, CONF_SOLAR_POWER_ENTITY, CONF_LOAD_POWER_ENTITY}
+TO_REDACT = {CONF_GRID_ENERGY_ENTITY, CONF_SOLAR_ENERGY_ENTITY, CONF_LOAD_ENERGY_ENTITY}
 
 
 async def async_get_config_entry_diagnostics(
@@ -42,9 +42,9 @@ async def async_get_config_entry_diagnostics(
     # Source entity availability.
     data["source_entities"] = {}
     for entity_id in (
-        entry.data.get(CONF_GRID_POWER_ENTITY),
-        entry.data.get(CONF_SOLAR_POWER_ENTITY),
-        entry.data.get(CONF_LOAD_POWER_ENTITY),
+        entry.data.get(CONF_GRID_ENERGY_ENTITY),
+        entry.data.get(CONF_SOLAR_ENERGY_ENTITY),
+        entry.data.get(CONF_LOAD_ENERGY_ENTITY),
     ):
         if entity_id:
             state = hass.states.get(entity_id)

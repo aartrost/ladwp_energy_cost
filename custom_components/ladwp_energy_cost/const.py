@@ -7,9 +7,9 @@ DOMAIN = "ladwp_energy_cost"
 VERSION = "0.8.0"
 
 # Configuration constants
-CONF_GRID_POWER_ENTITY = "grid_power_entity"
-CONF_SOLAR_POWER_ENTITY = "solar_power_entity"
-CONF_LOAD_POWER_ENTITY = "load_power_entity"
+CONF_GRID_ENERGY_ENTITY = "grid_energy_entity"
+CONF_SOLAR_ENERGY_ENTITY = "solar_energy_entity"
+CONF_LOAD_ENERGY_ENTITY = "load_energy_entity"
 CONF_RATE_PLAN = "rate_plan"
 CONF_BILLING_DAY = "billing_day"
 CONF_ZONE = "zone"
@@ -24,8 +24,7 @@ RATES_REFRESH_INTERVAL_DAYS = 7
 
 # Engine / storage tuning
 STORAGE_VERSION = 1
-UPDATE_INTERVAL_SECONDS = 60       # periodic tick: flush integration, persist, reset check
-MAX_INTEGRATION_GAP_HOURS = 6      # don't integrate power across gaps longer than this
+UPDATE_INTERVAL_SECONDS = 60       # periodic tick: recompute costs, persist, reset check
 DEFAULT_GRID_INVERT_SIGN = False
 
 # Time-of-use periods
@@ -40,8 +39,7 @@ ATTR_SOLAR_COST_SAVINGS = "solar_cost_savings"
 ATTR_TOTAL_KWH_CONSUMED = "total_kwh_consumed"
 ATTR_LOAD_COST = "load_cost"
 
-# Unit classification (case-insensitive). Power normalizes to W, energy to kWh.
-POWER_UNITS = {"w": 1.0, "kw": 1000.0, "mw": 1_000_000.0}
+# Recognized energy units (case-insensitive), normalized to kWh.
 ENERGY_UNITS = {"wh": 0.001, "kwh": 1.0, "mwh": 1000.0}
 
 # Rate plan options
