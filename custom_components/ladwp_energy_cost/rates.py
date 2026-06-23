@@ -5,6 +5,9 @@ which makes the billing logic straightforward to reason about and test.
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
 from datetime import datetime
 
 from .const import (
@@ -19,24 +22,80 @@ from .const import (
     LOW_PEAK_SUMMER_EVENING_END,
     LOW_PEAK_WINTER_START,
     LOW_PEAK_WINTER_END,
-    STANDARD_RATES,
-    STANDARD_RATES_2024,
-    STANDARD_RATES_2025,
-    STANDARD_RATES_2026,
-    TOU_RATES,
-    TOU_RATES_2024,
-    TOU_RATES_2025,
-    TOU_RATES_2026,
     TIER_LIMITS,
 )
 
-# Year-specific rate tables, indexed by year. Years outside this range fall back
-# to the nearest published table (see _table_for_year).
-_TOU_TABLES = {2024: TOU_RATES_2024, 2025: TOU_RATES_2025, 2026: TOU_RATES_2026}
-_STANDARD_TABLES = {2024: STANDARD_RATES_2024, 2025: STANDARD_RATES_2025, 2026: STANDARD_RATES_2026}
+_LOGGER = logging.getLogger(__name__)
 
-_MIN_YEAR = 2024
-_MAX_YEAR = 2026
+# Path of the rates.json that supplies the $/kWh tables. Generated and maintained
+# by scripts/fetch_ladwp_rates.py and by the in-integration auto-updater.
+RATES_JSON_PATH = os.path.join(os.path.dirname(__file__), "rates.json")
+
+
+class RatesUnavailable(Exception):
+    """Raised when a rate is requested but no rate tables have been loaded."""
+
+
+# The consumption-charge tables start EMPTY by design. The integration sources
+# $/kWh rates ONLY from rates.json (fetched from ladwp.com or populated by the
+# maintenance script) — never from hardcoded values — so it can never bill on
+# stale bundled prices. has_rate_tables() gates startup; until rates are loaded
+# the integration refuses to run. Tier limits are structural and default to
+# const.py until overridden by rates.json.
+_TOU_TABLES: dict = {}
+_STANDARD_TABLES: dict = {}
+_TIER_LIMITS = TIER_LIMITS
+
+
+def has_rate_tables() -> bool:
+    """Return True only if both TOU and standard rate tables are loaded."""
+    return bool(_TOU_TABLES) and bool(_STANDARD_TABLES)
+
+
+def load_rate_file(path: str = RATES_JSON_PATH):
+    """Read rates.json from disk. Returns the parsed dict, or None if absent.
+
+    Blocking file I/O — call from an executor, not the event loop.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as err:
+        _LOGGER.warning("Could not read %s: %s", path, err)
+        return None
+
+
+def apply_rate_data(data: dict) -> None:
+    """Override the in-memory rate tables from a parsed rates.json.
+
+    Only the sections present in ``data`` are applied; anything missing keeps the
+    const.py default. Malformed sections are skipped with a warning so a bad file
+    can never take down the integration.
+    """
+    global _TOU_TABLES, _STANDARD_TABLES, _TIER_LIMITS
+
+    def _int_keyed(years: dict) -> dict:
+        # {"2025": {"7": {...}}} -> {2025: {7: {...}}}
+        return {
+            int(year): {int(month): vals for month, vals in months.items()}
+            for year, months in years.items()
+        }
+
+    try:
+        if data.get("tou_rates"):
+            _TOU_TABLES = _int_keyed(data["tou_rates"])
+        if data.get("standard_rates"):
+            _STANDARD_TABLES = _int_keyed(data["standard_rates"])
+        if data.get("tier_limits"):
+            _TIER_LIMITS = data["tier_limits"]
+        _LOGGER.info(
+            "Applied rate overrides from rates.json (TOU years: %s, standard years: %s)",
+            sorted(_TOU_TABLES), sorted(_STANDARD_TABLES),
+        )
+    except (ValueError, AttributeError, TypeError) as err:
+        _LOGGER.warning("Ignoring malformed rates.json: %s", err)
 
 
 def is_summer(when: datetime) -> bool:
@@ -69,23 +128,17 @@ def get_time_period(when: datetime) -> str:
     return "base"
 
 
-def _table_for_year(tables: dict, legacy: dict, year: int, season: str):
-    """Pick the right rate table for a year, falling back gracefully.
-
-    Within the published range we use the exact year. Future years use the most
-    recent published table; older years use the legacy seasonal table.
-    """
-    if year in tables:
-        return tables[year], False
-    if year > _MAX_YEAR:
-        return tables[_MAX_YEAR], False
-    # Pre-2024: legacy seasonal shape, returned already keyed by season.
-    return legacy[season], True
+def _nearest_key(keys_sorted: list, want: int) -> int:
+    """Pick ``want`` if present, else the closest key at or below it (else lowest)."""
+    if want in keys_sorted:
+        return want
+    at_or_below = [k for k in keys_sorted if k <= want]
+    return at_or_below[-1] if at_or_below else keys_sorted[0]
 
 
 def _determine_tier(net_consumption_kwh: float, zone: str, billing_period: str) -> str:
     """Map cumulative net consumption to a standard-plan tier name."""
-    limits = TIER_LIMITS[zone][billing_period]
+    limits = _TIER_LIMITS[zone][billing_period]
     if net_consumption_kwh <= limits["tier1_limit"]:
         return "tier1"
     if net_consumption_kwh <= limits["tier2_limit"]:
@@ -103,16 +156,19 @@ def get_rate(
 ) -> float:
     """Return the $/kWh rate for the given moment, period, and plan.
 
-    For time-of-use the rate depends on month and period. For the standard plan
-    it depends on month and the consumption tier reached so far this cycle.
+    Looks the rate up purely from the loaded tables (rates.json). Years/months
+    not present fall back to the nearest available one within the loaded data —
+    e.g. a month LADWP hasn't published yet uses the most recent published month.
+    Raises RatesUnavailable if no tables are loaded.
     """
-    year = when.year
-    season = "summer" if is_summer(when) else "winter"
-
     if rate_plan == RATE_PLAN_TIME_OF_USE:
-        table, is_legacy = _table_for_year(_TOU_TABLES, TOU_RATES, year, season)
-        return table[period] if is_legacy else table[when.month][period]
+        tables, key = _TOU_TABLES, period
+    else:
+        tables, key = _STANDARD_TABLES, _determine_tier(net_consumption_kwh, zone, billing_period)
 
-    tier = _determine_tier(net_consumption_kwh, zone, billing_period)
-    table, is_legacy = _table_for_year(_STANDARD_TABLES, STANDARD_RATES, year, season)
-    return table[tier] if is_legacy else table[when.month][tier]
+    if not tables:
+        raise RatesUnavailable("No LADWP rate tables are loaded")
+
+    year_table = tables[_nearest_key(sorted(tables), when.year)]
+    month_rates = year_table[_nearest_key(sorted(year_table), when.month)]
+    return month_rates[key]

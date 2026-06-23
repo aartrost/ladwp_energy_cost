@@ -22,9 +22,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_LOAD_COST,
@@ -297,12 +298,26 @@ async def async_setup_entry(
     load = config.get(CONF_LOAD_POWER_ENTITY)
 
     descriptions = _build_descriptions(grid, solar, load)
-    entities = [
+    entities: List[SensorEntity] = [
         LADWPSensor(coordinator, name, grid, config, desc) for desc in descriptions
     ]
+    entities.append(LADWPRateUpdateSensor(coordinator, name, grid))
 
     _LOGGER.debug("Adding %d LADWP sensors", len(entities))
     async_add_entities(entities)
+
+
+def _ladwp_device_info(name: str, grid_entity_id: str) -> DeviceInfo:
+    """Shared device info so every sensor lands on the one integration device."""
+    device_id = f"ladwp_energy_cost_{grid_entity_id.replace('.', '_')}"
+    return DeviceInfo(
+        identifiers={(DOMAIN, device_id)},
+        name=name,
+        manufacturer="LADWP",
+        model="Energy Cost Calculator",
+        sw_version=VERSION,
+        entry_type=DeviceEntryType.SERVICE,
+    )
 
 
 class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
@@ -324,16 +339,7 @@ class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
         self._config = config
         self._attr_name = f"{name} {description.name}"
         self._attr_unique_id = description.unique_id
-
-        device_id = f"ladwp_energy_cost_{grid_entity_id.replace('.', '_')}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            name=name,
-            manufacturer="LADWP",
-            model="Energy Cost Calculator",
-            sw_version=VERSION,
-            entry_type=DeviceEntryType.SERVICE,
-        )
+        self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
 
     @property
     def native_value(self) -> float:
@@ -362,3 +368,45 @@ class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
         if desc.has_last_reset:
             return {"last_reset": self.coordinator.last_reset}
         return {}
+
+
+class LADWPRateUpdateSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
+    """Diagnostic sensor: when the rate tables last actually changed.
+
+    State = timestamp of the last update that changed a rate (None if rates have
+    never changed on this install). Attributes expose the last time a check ran
+    and how many values changed, so you can see the updater is working even when
+    nothing needed changing.
+    """
+
+    _attr_has_entity_name = False
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:cash-clock"
+
+    def __init__(
+        self,
+        coordinator: LADWPEnergyDataCoordinator,
+        name: str,
+        grid_entity_id: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_name = f"{name} Rate Last Updated"
+        self._attr_unique_id = f"ladwp_rate_last_updated_{grid_entity_id.replace('.', '_')}"
+        self._attr_device_info = _ladwp_device_info(name, grid_entity_id)
+
+    @property
+    def native_value(self) -> Optional[datetime]:
+        """Timestamp of the last rate change, or None if never changed."""
+        ts = (self.coordinator.rate_status or {}).get("last_changed")
+        return dt_util.parse_datetime(ts) if ts else None
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Expose the last check time and how much changed."""
+        status = self.coordinator.rate_status or {}
+        checked = status.get("last_checked")
+        return {
+            "last_checked": dt_util.parse_datetime(checked) if checked else None,
+            "last_change_count": status.get("last_change_count", 0),
+        }

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "note": "Consumption-charge rate tables are intentionally EMPTY so the integration never bills on stale bundled prices. It will not start until valid rates are loaded here -- automatically on first setup / each update / weekly, or by running scripts/fetch_ladwp_rates.py build. Tier limits below are structural defaults, not the volatile quarterly charges.",
+  "tier_limits": {
+    "zone_1": {
+      "monthly": { "tier1_limit": 350, "tier2_limit": 1050 },
+      "bimonthly": { "tier1_limit": 700, "tier2_limit": 2100 }
+    },
+    "zone_2": {
+      "monthly": { "tier1_limit": 500, "tier2_limit": 1500 },
+      "bimonthly": { "tier1_limit": 1000, "tier2_limit": 3000 }
+    }
+  },
+  "tou_rates": {},
+  "standard_rates": {}
+}

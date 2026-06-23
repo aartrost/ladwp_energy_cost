@@ -21,6 +21,7 @@ from .const import (
     DEFAULT_ZONE,
     DOMAIN,
 )
+from . import rate_updater
 from .coordinator import LADWPEnergyDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry, CONF_GRID_INVERT_SIGN, DEFAULT_GRID_INVERT_SIGN
         ),
     )
+
+    # Apply rates.json, fetch when needed (always — on first setup, on update,
+    # and weekly), and refuse to start without valid prices. Records the
+    # check/change status onto the coordinator for diagnostics.
+    await rate_updater.async_init_rates(hass, entry, coordinator)
 
     # Restore persisted state and start listening before entities are created.
     await coordinator.async_initialize()

@@ -48,6 +48,12 @@
       }
     }
   },
+  "issues": {
+    "rate_fetch_failed": {
+      "title": "Could not update LADWP rates",
+      "description": "Home Assistant could not fetch the latest electricity rates from ladwp.com ({url}).\n\nReason: {detail}.\n\nThe integration keeps using the most recent rates it successfully fetched and will retry automatically — usually no action is needed. If this persists, check Home Assistant's internet access, or update rates manually by running `scripts/fetch_ladwp_rates.py build`. This message clears itself once a fetch succeeds."
+    }
+  },
   "selector": {
     "rate_plan": {
       "options": {

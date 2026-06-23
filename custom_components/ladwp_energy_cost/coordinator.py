@@ -48,7 +48,6 @@ from .const import (
     DOMAIN,
     ENERGY_UNITS,
     MAX_INTEGRATION_GAP_HOURS,
-    NET_METERING_CREDIT_RATE,
     PERIODS,
     POWER_UNITS,
     STORAGE_VERSION,
@@ -124,6 +123,14 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         self._store = Store(hass, STORAGE_VERSION, storage_key)
         self._unsub_state = None
         self._unsub_stop = None
+
+        # Live mirror of the rate-update status (seeded/updated by rate_updater).
+        # Read by the diagnostic "Rate Last Updated" sensor.
+        self.rate_status: Dict[str, Any] = {
+            "last_checked": None,    # ISO str: last time a fetch was attempted
+            "last_changed": None,    # ISO str: last time a fetch actually changed rates
+            "last_change_count": 0,  # number of cells changed in that last change
+        }
 
     # ------------------------------------------------------------------ setup
 
@@ -269,7 +276,13 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         src.last_time = until
 
     def _recompute(self, now: datetime) -> None:
-        """Recalculate net energy and grid period costs from the buckets."""
+        """Recalculate net energy and grid period costs from the buckets.
+
+        LADWP uses 1-to-1 net metering: within a period a kWh exported offsets a
+        kWh imported at that period's own retail rate. So the cost is simply
+        net x the period rate, whether the period is net consumption (positive
+        cost) or net production (negative cost = a credit at the same retail rate).
+        """
         now = dt_util.as_local(now)  # rate lookup needs local wall time, not UTC
         net_total = (
             self.data[ATTR_TOTAL_KWH_DELIVERED] - self.data[ATTR_TOTAL_KWH_RECEIVED]
@@ -277,13 +290,10 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         for period in PERIODS:
             net = self.data[f"{period}_kwh_delivered"] - self.data[f"{period}_kwh_received"]
             self.data[f"net_{period}_kwh"] = net
-            if net > 0:  # net consumption — charged at the period rate
-                rate = rates.get_rate(
-                    self.rate_plan, now, period, self.zone, self.billing_period, net_total
-                )
-                self.data[f"{period}_cost"] = net * rate
-            else:  # net production — credited at the net-metering rate
-                self.data[f"{period}_cost"] = net * NET_METERING_CREDIT_RATE
+            rate = rates.get_rate(
+                self.rate_plan, now, period, self.zone, self.billing_period, net_total
+            )
+            self.data[f"{period}_cost"] = net * rate
         self.data[ATTR_TOTAL_KWH_NET] = net_total
 
     # ----------------------------------------------------------- event + tick

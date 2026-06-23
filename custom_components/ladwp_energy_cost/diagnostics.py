@@ -37,6 +37,7 @@ async def async_get_config_entry_diagnostics(
             coordinator.last_reset.isoformat() if coordinator.last_reset else None
         )
         data["last_update_success"] = coordinator.last_update_success
+        data["rate_status"] = dict(getattr(coordinator, "rate_status", {}) or {})
 
     # Source entity availability.
     data["source_entities"] = {}
