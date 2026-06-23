@@ -25,7 +25,7 @@ from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
+from homeassistant.util import dt as dt_util, slugify
 
 from .const import (
     ATTR_LOAD_COST,
@@ -386,6 +386,12 @@ class LADWPSensor(CoordinatorEntity[LADWPEnergyDataCoordinator], SensorEntity):
         self._attr_device_info = _ladwp_device_info(
             grid_entity_id, lifetime=description.lifetime
         )
+        # Predictable entity_id: cycle vs lifetime share a name (different
+        # devices), so prefix the Lifetime ones to avoid HA's "_2" suffix.
+        object_id = slugify(description.name)
+        if description.lifetime:
+            object_id = f"lifetime_{object_id}"
+        self.entity_id = f"sensor.{object_id}"
 
     @property
     def native_value(self) -> float:
