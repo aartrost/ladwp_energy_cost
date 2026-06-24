@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "LADWP Energy Cost Calculator",
-        "description": "Pick the cumulative energy sensors (Wh/kWh/MWh) that meter your home's electricity. Only the grid meter is required — it drives the bill. Solar and load are optional and add savings/usage breakdowns. Power (W/kW) sensors are not supported; if you only have power, feed it through a Riemann-sum or utility-meter helper first.",
+        "description": "Pick the cumulative energy sensors (Wh/kWh/MWh) that meter your home's electricity. Solar and load are optional and add savings/usage breakdowns. Power (W/kW) sensors are not supported; if you only have power, feed it through a Riemann-sum or utility-meter helper first.",
         "data": {
           "name": "Name",
           "grid_energy_entity": "Grid energy meter — net Wh/kWh to/from LADWP (required)",
@@ -16,11 +16,11 @@
           "grid_invert_sign": "My grid meter counts down when importing"
         },
         "data_description": {
-          "grid_energy_entity": "The single bidirectional, cumulative energy meter at your service point (a signed net kWh counter). It rises when importing from LADWP and falls when exporting excess solar. This is the only sensor that determines your bill. On an Enphase/CT-clamp setup this is the grid (net) energy value, not panel output.",
+          "grid_energy_entity": "A bidirectional energy meter. It rises when importing from LADWP and falls when exporting excess solar. On an Enphase/CT-clamp setup this is the grid (net) energy value, not panel output.",
           "solar_energy_entity": "Your cumulative solar production energy (kWh, only ever rising). Used only to estimate solar savings; it does not change the bill. On Enphase this is the lifetime production energy sensor.",
           "load_energy_entity": "Your cumulative whole-home consumption energy (kWh, only ever rising; load = solar + grid import). Used only for the consumption breakdown; it does not change the bill.",
-          "billing_period": "Monthly or bi-monthly, matching your LADWP plan. Bi-monthly cycles span two months and use the doubled tier limits.",
-          "last_bill_date": "The start date of your current bill (the day the meter was last read). Billing cycles are anchored here and step forward by your billing period — so for bi-monthly plans the cycle correctly spans the right two months.",
+          "billing_period": "Monthly or bi-monthly, matching your LADWP plan (Bi-monthly cycles span two months).",
+          "last_bill_date": "The start date of your current bill (the day the meter was last read).",
           "grid_invert_sign": "Leave off if your grid energy counter rises when importing from LADWP. Turn on only if it is reversed (rises when exporting), which would otherwise swap delivered and received."
         }
       }
