@@ -56,7 +56,7 @@ async def _async_fetch_html(hass: HomeAssistant) -> str | None:
     """Fetch the rates page. Try aiohttp first, then curl in an executor."""
     import aiohttp
 
-    _LOGGER.info("Fetching LADWP rate page: %s", LADWP_RATES_URL)
+    _LOGGER.warning("Fetching LADWP rate page: %s", LADWP_RATES_URL)
 
     session = async_get_clientsession(hass)
     headers = {"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"}
@@ -67,7 +67,7 @@ async def _async_fetch_html(hass: HomeAssistant) -> str | None:
             if resp.status == 200:
                 text = await resp.text()
                 if "<table" in text:
-                    _LOGGER.info(
+                    _LOGGER.warning(
                         "LADWP rate fetch OK via aiohttp (HTTP 200, %d bytes)", len(text)
                     )
                     return text
@@ -84,7 +84,7 @@ async def _async_fetch_html(hass: HomeAssistant) -> str | None:
 
     html = await hass.async_add_executor_job(_curl_fetch)
     if html:
-        _LOGGER.info("LADWP rate fetch OK via curl (%d bytes)", len(html))
+        _LOGGER.warning("LADWP rate fetch OK via curl (%d bytes)", len(html))
     else:
         _LOGGER.warning("LADWP rate fetch failed via both aiohttp and curl")
     return html
@@ -196,13 +196,13 @@ async def async_refresh_rates(hass: HomeAssistant, *, reason: str) -> int:
     _clear_warning(hass)
 
     if not changes:
-        _LOGGER.info("Rate update (%s): fetch OK — rates already current, no changes", reason)
+        _LOGGER.warning("Rate update (%s): fetch OK — rates already current, no changes", reason)
         return 0
 
     base["generated_at"] = dt_util.utcnow().isoformat(timespec="seconds")
     await hass.async_add_executor_job(_write_rates, _RATES_PATH, base)
     rates.apply_rate_data(base)
-    _LOGGER.info(
+    _LOGGER.warning(
         "Rate update (%s): applied %d change(s): %s",
         reason, len(changes), "; ".join(changes),
     )
@@ -260,7 +260,7 @@ async def async_init_rates(hass: HomeAssistant, entry, coordinator) -> None:
     did_fetch = False
     if is_update or not rates.has_rate_tables():
         reason = "integration update" if is_update else "missing rate data"
-        _LOGGER.info("Fetching LADWP rates before startup (%s)", reason)
+        _LOGGER.warning("Fetching LADWP rates before startup (%s)", reason)
         await _run_check(hass, store, meta, coordinator, reason=reason)
         did_fetch = True
         if rates.has_rate_tables():
@@ -286,17 +286,17 @@ async def async_init_rates(hass: HomeAssistant, entry, coordinator) -> None:
     if did_fetch:
         pass  # already fetched above; don't double up
     elif last is None:
-        _LOGGER.info("No record of a previous rate check; fetching now")
+        _LOGGER.warning("No record of a previous rate check; fetching now")
         await _run_check(hass, store, meta, coordinator, reason="initial check")
     elif dt_util.utcnow() - last >= interval:
         age = dt_util.utcnow() - last
-        _LOGGER.info(
+        _LOGGER.warning(
             "Last rate check was %s ago (>= %s interval); refreshing", age, interval
         )
         await _run_check(hass, store, meta, coordinator, reason="scheduled catch-up")
     else:
         age = dt_util.utcnow() - last
-        _LOGGER.info(
+        _LOGGER.warning(
             "Skipping rate fetch on startup — last check was %s ago, within the %s "
             "interval", age, interval,
         )
