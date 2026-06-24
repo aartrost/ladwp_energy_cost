@@ -19,8 +19,9 @@ restarts, which is what makes values survive a reboot.
 """
 from __future__ import annotations
 
+import calendar
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -42,6 +43,7 @@ from .const import (
     ATTR_TOTAL_KWH_GENERATED,
     ATTR_TOTAL_KWH_NET,
     ATTR_TOTAL_KWH_RECEIVED,
+    BILLING_BIMONTHLY,
     DEFAULT_BILLING_PERIOD,
     DEFAULT_GRID_INVERT_SIGN,
     DEFAULT_ZONE,
@@ -83,7 +85,7 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         solar_entity_id: Optional[str],
         load_entity_id: Optional[str],
         rate_plan: str,
-        billing_day: int,
+        last_bill_date: date,
         zone: str = DEFAULT_ZONE,
         billing_period: str = DEFAULT_BILLING_PERIOD,
         grid_invert_sign: bool = DEFAULT_GRID_INVERT_SIGN,
@@ -98,7 +100,9 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
         self.solar_entity_id = solar_entity_id
         self.load_entity_id = load_entity_id
         self.rate_plan = rate_plan
-        self.billing_day = int(billing_day)
+        # Anchor date of the user's last bill; cycles step from here by the
+        # billing-period length (1 month monthly, 2 months bi-monthly).
+        self.last_bill_date = last_bill_date
         self.zone = zone
         self.billing_period = billing_period
         self.grid_invert_sign = grid_invert_sign
@@ -419,12 +423,31 @@ class LADWPEnergyDataCoordinator(DataUpdateCoordinator):
 
     # --------------------------------------------------------- billing cycle
 
+    @staticmethod
+    def _add_months(when: datetime, months: int) -> datetime:
+        """Add whole months to a datetime, clamping the day to month length."""
+        index = when.month - 1 + months
+        year = when.year + index // 12
+        month = index % 12 + 1
+        day = min(when.day, calendar.monthrange(year, month)[1])
+        return when.replace(year=year, month=month, day=day)
+
     def _get_billing_cycle_start(self) -> datetime:
-        """Return the start-of-day datetime for the current billing cycle."""
+        """Start-of-day of the current billing cycle.
+
+        Cycles are anchored on the last bill date and step forward by the
+        billing-period length (1 month, or 2 for bi-monthly), so the boundary
+        lands correctly even within a bi-monthly cycle.
+        """
         now = dt_util.now()
-        day = self.billing_day
-        if now.day >= day:
-            return dt_util.start_of_local_day(datetime(now.year, now.month, day))
-        month = now.month - 1 if now.month > 1 else 12
-        year = now.year if now.month > 1 else now.year - 1
-        return dt_util.start_of_local_day(datetime(year, month, day))
+        step = 2 if self.billing_period == BILLING_BIMONTHLY else 1
+        cycle = dt_util.start_of_local_day(
+            datetime(self.last_bill_date.year, self.last_bill_date.month, self.last_bill_date.day)
+        )
+        if cycle >= now:
+            return cycle  # the anchor is in the future; first cycle not elapsed
+        while True:
+            nxt = self._add_months(cycle, step)
+            if nxt > now:
+                return cycle
+            cycle = nxt

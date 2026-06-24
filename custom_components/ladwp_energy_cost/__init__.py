@@ -4,17 +4,17 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import (
-    CONF_BILLING_DAY,
     CONF_BILLING_PERIOD,
     CONF_GRID_INVERT_SIGN,
     CONF_GRID_ENERGY_ENTITY,
+    CONF_LAST_BILL_DATE,
     CONF_LOAD_ENERGY_ENTITY,
     CONF_RATE_PLAN,
     CONF_SOLAR_ENERGY_ENTITY,
     CONF_ZONE,
-    DEFAULT_BILLING_DAY,
     DEFAULT_BILLING_PERIOD,
     DEFAULT_GRID_INVERT_SIGN,
     DEFAULT_NAME,
@@ -47,6 +47,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Setting up LADWP Energy Cost entry: %s", entry.entry_id)
     hass.data.setdefault(DOMAIN, {})
 
+    # The last-bill date anchors the billing cycle. Fall back to the 1st of the
+    # current month if missing/invalid (e.g. an entry from before this field).
+    raw_date = _config_value(entry, CONF_LAST_BILL_DATE)
+    last_bill_date = dt_util.parse_date(raw_date) if raw_date else None
+    if last_bill_date is None:
+        last_bill_date = dt_util.now().date().replace(day=1)
+
     coordinator = LADWPEnergyDataCoordinator(
         hass,
         name=entry.data.get(CONF_NAME, DEFAULT_NAME),
@@ -54,7 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         solar_entity_id=entry.data.get(CONF_SOLAR_ENERGY_ENTITY),
         load_entity_id=entry.data.get(CONF_LOAD_ENERGY_ENTITY),
         rate_plan=_config_value(entry, CONF_RATE_PLAN),
-        billing_day=_config_value(entry, CONF_BILLING_DAY, DEFAULT_BILLING_DAY),
+        last_bill_date=last_bill_date,
         zone=_config_value(entry, CONF_ZONE, DEFAULT_ZONE),
         billing_period=_config_value(entry, CONF_BILLING_PERIOD, DEFAULT_BILLING_PERIOD),
         grid_invert_sign=_config_value(

@@ -7,18 +7,18 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
+from homeassistant.util import dt as dt_util
 
 from .const import (
     BILLING_PERIOD_OPTIONS,
-    CONF_BILLING_DAY,
     CONF_BILLING_PERIOD,
     CONF_GRID_INVERT_SIGN,
     CONF_GRID_ENERGY_ENTITY,
+    CONF_LAST_BILL_DATE,
     CONF_LOAD_ENERGY_ENTITY,
     CONF_RATE_PLAN,
     CONF_SOLAR_ENERGY_ENTITY,
     CONF_ZONE,
-    DEFAULT_BILLING_DAY,
     DEFAULT_BILLING_PERIOD,
     DEFAULT_GRID_INVERT_SIGN,
     DEFAULT_NAME,
@@ -35,6 +35,11 @@ _LOGGER = logging.getLogger(__name__)
 _ENTITY_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="sensor", device_class="energy")
 )
+
+
+def _default_last_bill_date() -> str:
+    """A reasonable default anchor: the 1st of the current month (ISO date)."""
+    return dt_util.now().date().replace(day=1).isoformat()
 
 
 class LADWPEnergyConfigFlow(config_entries.ConfigFlow, domain="ladwp_energy_cost"):
@@ -81,10 +86,8 @@ class LADWPEnergyConfigFlow(config_entries.ConfigFlow, domain="ladwp_energy_cost
                     )
                 ),
                 vol.Required(
-                    CONF_BILLING_DAY, default=DEFAULT_BILLING_DAY
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=31, mode="slider")
-                ),
+                    CONF_LAST_BILL_DATE, default=_default_last_bill_date()
+                ): selector.DateSelector(),
                 vol.Required(
                     CONF_GRID_INVERT_SIGN, default=DEFAULT_GRID_INVERT_SIGN
                 ): selector.BooleanSelector(),
@@ -142,11 +145,9 @@ class LADWPEnergyOptionsFlow(config_entries.OptionsFlow):
                     )
                 ),
                 vol.Required(
-                    CONF_BILLING_DAY,
-                    default=current(CONF_BILLING_DAY, DEFAULT_BILLING_DAY),
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=31, mode="slider")
-                ),
+                    CONF_LAST_BILL_DATE,
+                    default=current(CONF_LAST_BILL_DATE, _default_last_bill_date()),
+                ): selector.DateSelector(),
                 vol.Required(
                     CONF_GRID_INVERT_SIGN,
                     default=current(CONF_GRID_INVERT_SIGN, DEFAULT_GRID_INVERT_SIGN),
